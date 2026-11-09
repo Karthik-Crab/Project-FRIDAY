@@ -1,0 +1,201 @@
+"""Command-line entry point for the Phase 1 prototype.
+
+friday chat                 text conversation (streams replies)
+friday voice                live voice conversation (needs friday[voice])
+friday voice --simulate     scripted voice session with fake audio/models
+friday providers            check which providers are reachable
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+import sys
+from pathlib import Path
+
+from friday.config import FridayConfig, load_config
+from friday.conversation.engine import ConversationEngine
+from friday.core.errors import FridayError
+from friday.core.logging import configure_logging
+from friday.core.secrets import KeyringEnvSecretStore
+from friday.llm.factory import build_router
+from friday.llm.router import ProviderRouter
+from friday.persona.persona import Channel, Mode, Persona
+
+log = logging.getLogger("friday")
+
+
+def _engine(config: FridayConfig, router: ProviderRouter, channel: Channel) -> ConversationEngine:
+    return ConversationEngine(
+        router, Persona(user_name=config.user_name), channel=channel, mode=config.default_mode
+    )
+
+
+async def _chat(config: FridayConfig, router: ProviderRouter) -> None:
+    engine = _engine(config, router, Channel.TEXT)
+    print("FRIDAY text chat. /work, /companion, /provider <name|auto>, /quit")
+    while True:
+        try:
+            line = await asyncio.to_thread(input, f"[{engine.mode}] you> ")
+        except (EOFError, KeyboardInterrupt):
+            return
+        line = line.strip()
+        if not line:
+            continue
+        if line in ("/quit", "/exit"):
+            return
+        if line in ("/work", "/companion"):
+            engine.set_mode(Mode(line[1:]))
+            continue
+        if line.startswith("/provider"):
+            arg = line.partition(" ")[2].strip()
+            try:
+                router.set_override(None if arg in ("", "auto") else arg)
+            except ValueError as exc:
+                print(exc)
+            continue
+        print("friday> ", end="", flush=True)
+        async for delta in engine.respond(line):
+            print(delta, end="", flush=True)
+        provider = engine.last_turn.provider
+        print(f"\n          ({provider.name if provider else 'no provider'})")
+
+
+async def _providers(router: ProviderRouter) -> int:
+    ok = True
+    for name, provider in router.providers.items():
+        healthy = await provider.health_check()
+        ok &= healthy
+        info = provider.info
+        where = "local" if info.local else "cloud"
+        print(f"{'OK  ' if healthy else 'FAIL'} {name:<16} {info.kind:<10} {where:<6} {info.model}")
+    return 0 if ok else 1
+
+
+def _print_voice_event(event: object) -> None:
+    from friday.voice import session as vs
+
+    if isinstance(event, vs.UserSaid):
+        print(f"\nyou> {event.text}")
+    elif isinstance(event, vs.AssistantSaid):
+        print(f"friday> {event.text}")
+    elif isinstance(event, vs.Interrupted):
+        print(f"  [interrupted ({event.reason}); heard: {event.heard!r}]")
+    elif isinstance(event, vs.TurnFinished):
+        m = event.metrics
+        print(
+            f"  [stt {m.stt_ms:.0f} ms | first token {m.first_token_ms or 0:.0f} ms | "
+            f"first audio {m.first_audio_ms or 0:.0f} ms | endpoint {m.endpoint_ms:.0f} ms | "
+            f"{m.provider}]"
+        )
+    elif isinstance(event, vs.VoiceErrorEvent):
+        print(f"  [error: {event.message}]")
+    elif isinstance(event, vs.StateChanged):
+        log.debug("state -> %s", event.state)
+
+
+async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -> None:
+    from friday.voice.base import SpeechToText, TextToSpeech
+    from friday.voice.segmenter import SegmenterConfig
+    from friday.voice.session import VoiceConfig, VoiceSession
+    from friday.voice.vad import EnergyVAD
+
+    v = config.voice
+    vcfg = VoiceConfig(
+        speech_threshold=v.speech_threshold,
+        speech_threshold_while_speaking=v.speech_threshold_while_speaking,
+        barge_in_min_ms=v.barge_in_min_ms,
+        segmenter=SegmenterConfig(end_silence_ms=v.end_silence_ms),
+    )
+    engine = _engine(config, router, Channel.VOICE)
+    stt: SpeechToText
+    tts: TextToSpeech
+    if simulate:
+        from friday.voice import fakes
+
+        sink = fakes.FakeAudioSink(speed=4.0)
+        source = fakes.ScriptedAudioSource(
+            [
+                fakes.Silence(300),
+                fakes.Speak(900),
+                fakes.Silence(800),
+                fakes.WaitFor(lambda: sink.is_playing),
+                fakes.Speak(600),
+                fakes.Silence(800),
+                fakes.WaitFor(lambda: not sink.is_playing, timeout_s=60),
+                fakes.Silence(2000),
+            ],
+            realtime=1.0,
+        )
+        stt = fakes.ScriptedSTT(
+            [
+                "Hey Friday, tell me something interesting about octopuses.",
+                "Wait, how many hearts did you say?",
+            ]
+        )
+        tts = fakes.FakeTTS()
+        session = VoiceSession(
+            engine, source, EnergyVAD(), stt, tts, sink, vcfg, on_event=_print_voice_event
+        )
+    else:
+        from friday.voice.adapters.faster_whisper_stt import FasterWhisperSTT
+        from friday.voice.adapters.kokoro_tts import KokoroTTS
+        from friday.voice.adapters.sounddevice_io import MicrophoneSource, SpeakerSink
+
+        print("Loading speech models...")
+        stt = FasterWhisperSTT(
+            v.stt_model, device=v.stt_device, compute_type=v.stt_compute_type, language=v.language
+        )
+        tts = KokoroTTS(v.tts_model_path, v.tts_voices_path, voice=v.tts_voice, speed=v.tts_speed)
+        session = VoiceSession(
+            engine,
+            MicrophoneSource(v.input_device),
+            EnergyVAD(),
+            stt,
+            tts,
+            SpeakerSink(v.output_device),
+            vcfg,
+            on_event=_print_voice_event,
+        )
+        print("Listening. Use a headset for now (no echo cancellation yet). Ctrl+C to quit.")
+    await session.run()
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="friday")
+    parser.add_argument("--config", type=Path, default=None)
+    parser.add_argument("--offline", action="store_true", help="use local providers only")
+    parser.add_argument("--provider", help="force a specific provider instance")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("chat")
+    voice = sub.add_parser("voice")
+    voice.add_argument("--simulate", action="store_true")
+    sub.add_parser("providers")
+    args = parser.parse_args(argv)
+
+    try:
+        config = load_config(args.config)
+        configure_logging(config.log_level)
+        router, warnings = build_router(config, KeyringEnvSecretStore())
+        for w in warnings:
+            log.warning(w)
+        router.offline = router.offline or args.offline
+        if args.provider:
+            router.set_override(args.provider)
+        if args.command == "chat":
+            asyncio.run(_chat(config, router))
+        elif args.command == "voice":
+            asyncio.run(_voice(config, router, args.simulate))
+        else:
+            return asyncio.run(_providers(router))
+    except (FridayError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())

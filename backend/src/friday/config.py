@@ -1,0 +1,96 @@
+"""User configuration (TOML, no secrets).
+
+Location: ``$FRIDAY_CONFIG`` if set, else ``%APPDATA%\\FRIDAY\\config.toml`` on
+Windows / ``~/.config/friday/config.toml`` elsewhere. A missing file means
+"local only": one Ollama provider, so FRIDAY works offline out of the box.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import tomllib
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+
+from friday.core.errors import ConfigError
+from friday.persona.persona import Mode
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ProviderConfig(_Strict):
+    kind: Literal["ollama", "openai", "anthropic"]
+    model: str
+    base_url: str | None = None
+    # Name under which the key is stored in the OS credential store
+    # (or FRIDAY_<NAME>_API_KEY). Never the key itself.
+    api_key_name: str | None = None
+    local: bool | None = None  # override for OpenAI-compatible local servers
+
+
+class VoiceSettings(_Strict):
+    stt_model: str = "small.en"
+    stt_device: str = "auto"
+    stt_compute_type: str = "default"
+    language: str = "en"
+    tts_model_path: str = "models/kokoro-v1.0.onnx"
+    tts_voices_path: str = "models/voices-v1.0.bin"
+    tts_voice: str = "af_heart"
+    tts_speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    input_device: int | str | None = None
+    output_device: int | str | None = None
+    end_silence_ms: float = Field(default=700.0, ge=200, le=3000)
+    barge_in_min_ms: float = Field(default=400.0, ge=100, le=3000)
+    speech_threshold: float = Field(default=0.5, ge=0.05, le=0.99)
+    speech_threshold_while_speaking: float = Field(default=0.85, ge=0.05, le=0.99)
+
+
+def _default_providers() -> dict[str, ProviderConfig]:
+    return {"local": ProviderConfig(kind="ollama", model="llama3.1:8b")}
+
+
+def _default_routes() -> dict[str, list[str]]:
+    return {"default": ["local"], "offline": ["local"]}
+
+
+class FridayConfig(_Strict):
+    user_name: str = "Karthik"
+    default_mode: Mode = Mode.COMPANION
+    offline: bool = False
+    log_level: str = "INFO"
+    providers: dict[str, ProviderConfig] = Field(default_factory=_default_providers)
+    routes: dict[str, list[str]] = Field(default_factory=_default_routes)
+    voice: VoiceSettings = Field(default_factory=VoiceSettings)
+
+    @model_validator(mode="after")
+    def _check_routes(self) -> FridayConfig:
+        for purpose, names in self.routes.items():
+            unknown = [n for n in names if n not in self.providers]
+            if unknown:
+                raise ValueError(f"route '{purpose}' uses undefined providers: {unknown}")
+        return self
+
+
+def default_config_path() -> Path:
+    if env := os.environ.get("FRIDAY_CONFIG"):
+        return Path(env)
+    if sys.platform == "win32" and (appdata := os.environ.get("APPDATA")):
+        return Path(appdata) / "FRIDAY" / "config.toml"
+    return Path.home() / ".config" / "friday" / "config.toml"
+
+
+def load_config(path: Path | None = None) -> FridayConfig:
+    path = path or default_config_path()
+    if not path.exists():
+        return FridayConfig()
+    try:
+        with path.open("rb") as fh:
+            data = tomllib.load(fh)
+        return FridayConfig.model_validate(data)
+    except (tomllib.TOMLDecodeError, ValidationError) as exc:
+        raise ConfigError(f"invalid config {path}: {exc}") from exc

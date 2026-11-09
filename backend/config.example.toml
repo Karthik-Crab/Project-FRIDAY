@@ -1,0 +1,60 @@
+# FRIDAY configuration. Copy to:
+#   Windows: %APPDATA%\FRIDAY\config.toml
+#   other:   ~/.config/friday/config.toml     (or set FRIDAY_CONFIG)
+#
+# NO SECRETS IN THIS FILE. API keys live in Windows Credential Manager:
+#   python -c "import keyring; keyring.set_password('friday', 'anthropic', input('key: '))"
+# or, for development only, in environment variables FRIDAY_<NAME>_API_KEY
+# (e.g. FRIDAY_ANTHROPIC_API_KEY).
+
+user_name = "Karthik"
+default_mode = "companion"   # or "work"
+offline = false              # true = never call cloud providers
+log_level = "INFO"
+
+# ---- providers: named instances of an adapter kind -----------------------
+
+[providers.local]
+kind = "ollama"
+model = "llama3.1:8b"        # any model you have pulled with `ollama pull`
+
+[providers.claude]
+kind = "anthropic"
+model = "<anthropic-model-id>"   # set to a current model id
+api_key_name = "anthropic"
+
+[providers.openai]
+kind = "openai"
+model = "<openai-model-id>"      # set to a current model id
+api_key_name = "openai"
+
+# Gemini via its OpenAI-compatible endpoint (a native adapter is planned):
+# [providers.gemini]
+# kind = "openai"
+# base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+# model = "<gemini-model-id>"
+# api_key_name = "gemini"
+
+# ---- routes: purpose -> ordered providers (first healthy one wins) -------
+# Companion mode uses "conversation", work mode uses "reasoning".
+# The "offline" route is always appended as the last resort.
+
+[routes]
+conversation = ["openai", "local"]
+reasoning = ["claude", "local"]
+default = ["local"]
+offline = ["local"]
+
+# ---- voice ---------------------------------------------------------------
+
+[voice]
+stt_model = "small.en"           # faster-whisper size; "base.en" for slower CPUs
+stt_device = "auto"              # "cuda" if you have an NVIDIA GPU
+tts_model_path = "models/kokoro-v1.0.onnx"
+tts_voices_path = "models/voices-v1.0.bin"
+tts_voice = "af_heart"
+tts_speed = 1.0
+end_silence_ms = 700             # pause length that ends your turn
+barge_in_min_ms = 400            # how long you must speak to interrupt
+# input_device = 1               # see: python -m sounddevice
+# output_device = 3

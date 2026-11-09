@@ -1,0 +1,267 @@
+"""End-to-end voice session tests with the real VAD/segmenter/chunker/engine.
+
+Only the microphone, Whisper, Kokoro and the speaker are faked. These are the
+automated acceptance tests for Phase 1's interaction requirements.
+"""
+
+import asyncio
+
+from friday.conversation.engine import ConversationEngine
+from friday.conversation.memory import INTERRUPTED_MARKER
+from friday.core.messages import Role
+from friday.llm.providers.fake import FakeProvider
+from friday.llm.router import ProviderRouter
+from friday.persona.persona import Channel, Mode
+from friday.voice import session as vs
+from friday.voice.fakes import (
+    FakeAudioSink,
+    FakeTTS,
+    ScriptedAudioSource,
+    ScriptedSTT,
+    Silence,
+    Speak,
+    WaitFor,
+)
+from friday.voice.vad import EnergyVAD
+
+LONG_REPLY = (
+    "Octopuses are remarkable animals. They have three hearts and blue blood. "
+    "Each arm has its own cluster of neurons, so the arms can taste and react on their own. "
+    "They can also change colour and texture in a fraction of a second."
+)
+
+
+def long_then_short(request):  # type: ignore[no-untyped-def]
+    """Long answer to the first question, short answers afterwards."""
+    return LONG_REPLY if len(request.messages) == 1 else "Yes, three hearts."
+
+
+def build(steps, transcripts, reply=LONG_REPLY, sink_speed=20.0):  # type: ignore[no-untyped-def]
+    provider = FakeProvider("fake", reply=reply, delay=0.001)
+    engine = ConversationEngine(
+        ProviderRouter({"fake": provider}, {"default": ["fake"]}), channel=Channel.VOICE
+    )
+    sink = FakeAudioSink(speed=sink_speed)
+    tts = FakeTTS()
+    events: list[object] = []
+    session = vs.VoiceSession(
+        engine,
+        ScriptedAudioSource(steps),
+        EnergyVAD(),
+        ScriptedSTT(transcripts),
+        tts,
+        sink,
+        on_event=events.append,
+    )
+    return session, engine, provider, sink, tts, events
+
+
+def of(events, kind):  # type: ignore[no-untyped-def]
+    return [e for e in events if isinstance(e, kind)]
+
+
+async def test_listen_understand_respond() -> None:
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),
+            WaitFor(lambda: not session._turn_active(), timeout_s=10),
+        ],
+        ["Tell me about octopuses"],
+    )
+    await asyncio.wait_for(session.run(), 15)
+    assert of(events, vs.UserSaid)[0].text == "Tell me about octopuses"
+    spoken = " ".join(e.text for e in of(events, vs.AssistantSaid))
+    assert spoken.split() == LONG_REPLY.split()
+    assert len(tts.spoken) >= 3  # streamed sentence by sentence
+    finished = of(events, vs.TurnFinished)
+    assert len(finished) == 1 and not finished[0].interrupted
+    m = finished[0].metrics
+    assert m.first_token_ms is not None and m.first_audio_ms is not None
+    assert m.first_audio_ms >= m.first_token_ms
+    assert m.provider == "fake"
+    states = [e.state for e in of(events, vs.StateChanged)]
+    assert states[:3] == [
+        vs.VoiceState.USER_SPEAKING,
+        vs.VoiceState.THINKING,
+        vs.VoiceState.SPEAKING,
+    ]
+    assert states[-1] is vs.VoiceState.LISTENING
+
+
+async def test_barge_in_stops_speech_quickly_and_history_reflects_what_was_heard() -> None:
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),
+            WaitFor(lambda: sink.is_playing),
+            Speak(600),
+            Silence(900),
+            WaitFor(lambda: len(of(events, vs.TurnFinished)) >= 2, timeout_s=10),
+        ],
+        ["Tell me about octopuses", "Wait, three hearts?"],
+        reply=long_then_short,
+        sink_speed=1.0,  # real-time playback so the reply is long enough to interrupt
+    )
+    await asyncio.wait_for(session.run(), 20)
+
+    interrupted = of(events, vs.Interrupted)
+    assert len(interrupted) == 1 and interrupted[0].reason == "barge_in"
+    heard = interrupted[0].heard
+    assert len(heard) < len(LONG_REPLY)
+    assert sink.played[0] < 1.0  # first chunk was cut off mid-playback
+
+    # The second user turn was answered.
+    finished = of(events, vs.TurnFinished)
+    assert [f.interrupted for f in finished] == [True, False]
+
+    # History: assistant turn rewritten to what was actually heard.
+    msgs = engine.window.messages
+    assert [m.role for m in msgs] == [Role.USER, Role.ASSISTANT, Role.USER, Role.ASSISTANT]
+    assert msgs[1].content.endswith(INTERRUPTED_MARKER)
+    assert msgs[1].content == (heard or "(nothing heard)") + INTERRUPTED_MARKER
+    assert msgs[2].content == "Wait, three hearts?"
+    # And the model was told about it on the next request.
+    assert INTERRUPTED_MARKER in provider.requests[-1].messages[1].content
+
+
+async def test_barge_in_latency_is_bounded_by_threshold() -> None:
+    """Playback must stop within ~barge_in_min_ms of audio after the user starts talking.
+
+    Measured in audio frames (not wall-clock), so it is deterministic.
+    """
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),
+            WaitFor(lambda: sink.is_playing),
+            Speak(1500),
+            Silence(900),
+            WaitFor(lambda: len(of(events, vs.TurnFinished)) >= 2, timeout_s=10),
+        ],
+        ["Tell me about octopuses", "Never mind that, what time is it?"],
+        reply=long_then_short,
+        sink_speed=1.0,
+    )
+    probe = _BargeInProbe(session.source, sink)
+    session.source = probe  # type: ignore[assignment]
+    await asyncio.wait_for(session.run(), 20)
+    assert of(events, vs.Interrupted)
+    assert probe.frames_until_stop is not None
+    budget_frames = session.config.barge_in_min_ms / 20 + 2  # threshold + scheduling slack
+    assert probe.frames_until_stop <= budget_frames
+
+
+class _BargeInProbe:
+    """Counts speech frames delivered after onset-during-playback until playback stops."""
+
+    def __init__(self, inner, sink) -> None:  # type: ignore[no-untyped-def]
+        self.inner, self.sink = inner, sink
+        self.frames_until_stop: int | None = None
+
+    async def frames(self):  # type: ignore[no-untyped-def]
+        from friday.voice.vad import frame_dbfs
+
+        counting = False
+        count = 0
+        async for frame in self.inner.frames():
+            loud = frame_dbfs(frame.pcm) > -30
+            if not counting and loud and self.sink.is_playing:
+                counting = True
+            if counting and self.frames_until_stop is None:
+                if not self.sink.is_playing:
+                    self.frames_until_stop = count
+                elif loud:
+                    count += 1
+            yield frame
+
+
+async def test_stop_command_silences_without_new_reply() -> None:
+    # A short "stop" (under the barge-in threshold) is recognised by transcript.
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),
+            WaitFor(lambda: sink.is_playing),
+            Speak(300),
+            Silence(900),
+            WaitFor(lambda: not session._turn_active(), timeout_s=10),
+            Silence(200),
+        ],
+        ["Tell me about octopuses", "Stop."],
+        sink_speed=1.0,
+    )
+    await asyncio.wait_for(session.run(), 20)
+    assert [i.reason for i in of(events, vs.Interrupted)] == ["stop"]
+    assert len(provider.requests) == 1  # no reply to "stop"
+
+
+async def test_backchannel_does_not_interrupt() -> None:
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),
+            WaitFor(lambda: sink.is_playing),
+            Speak(300),
+            Silence(900),
+            WaitFor(lambda: not session._turn_active(), timeout_s=30),
+        ],
+        ["Tell me about octopuses", "mm-hmm"],
+        sink_speed=5.0,
+    )
+    await asyncio.wait_for(session.run(), 30)
+    assert of(events, vs.Interrupted) == []
+    assert [f.interrupted for f in of(events, vs.TurnFinished)] == [False]
+
+
+async def test_voice_mode_switch() -> None:
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),
+            WaitFor(lambda: not session._turn_active() and bool(of(events, vs.TurnFinished))),
+        ],
+        ["Friday, work mode."],
+    )
+    await asyncio.wait_for(session.run(), 10)
+    assert engine.mode is Mode.WORK
+    assert "Work mode" in " ".join(e.text for e in of(events, vs.AssistantSaid))
+    assert provider.requests == []
+
+
+async def test_stt_failure_is_reported_and_session_survives() -> None:
+    from friday.core.errors import VoiceError
+
+    class BrokenSTT:
+        calls = 0
+
+        async def transcribe(self, pcm: bytes, sample_rate: int):  # type: ignore[no-untyped-def]
+            BrokenSTT.calls += 1
+            if BrokenSTT.calls == 1:
+                raise VoiceError("model crashed")
+            from friday.voice.base import Transcript
+
+            return Transcript("hello again")
+
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(600),
+            Silence(900),
+            Speak(600),
+            Silence(900),
+            WaitFor(lambda: bool(of(events, vs.TurnFinished)), timeout_s=10),
+        ],
+        [],
+        reply="Hi there.",
+    )
+    session.stt = BrokenSTT()
+    await asyncio.wait_for(session.run(), 10)
+    assert of(events, vs.VoiceErrorEvent)
+    assert of(events, vs.UserSaid)[0].text == "hello again"
