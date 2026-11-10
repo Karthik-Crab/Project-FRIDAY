@@ -102,6 +102,18 @@ quieter than a fixed level. It exists because the laptop's microphone driver mut
 silence completely, which leaves the adaptive noise floor at digital zero and makes
 every faint sound look like speech.
 
+**Passing tasks to Claude Code.** Optional (`[claude_code]` in the config). FRIDAY
+does none of the work: a fixed phrase ("ask Claude Code to ...") is recognised by
+`conversation/delegation.py` before the language model is involved, the task is
+read back, and only a spoken "yes" sends it. `integrations/claude_code.py` then
+runs the `claude` program non-interactively in the configured folder, with the
+task on standard input (never on the command line) and with Claude Code's own
+login and permission settings. It runs in the background; when it finishes, the
+session speaks a one or two sentence summary that Claude Code itself was asked to
+write, stores it in history, and the full output is saved next to the config file
+under `claude-code/`. Follow-up tasks continue the same Claude Code session.
+Bypassing Claude Code's permissions is not offered as a setting.
+
 **Fillers.** "Hmm" or "uh" with nothing else is never treated as a turn, whether or
 not FRIDAY is speaking. "Yes" and "okay" are backchannels only while she is
 speaking; into silence they are answers.

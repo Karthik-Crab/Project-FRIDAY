@@ -29,7 +29,7 @@ pip install -e ".[dev,secrets,voice,realtime]"
 pytest
 ```
 
-**Check 1:** 97 passed.
+**Check 1:** 115 passed.
 
 ## Stage 2: config and microphone level
 

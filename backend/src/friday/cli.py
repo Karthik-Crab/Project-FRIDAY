@@ -17,7 +17,8 @@ import logging
 import sys
 from pathlib import Path
 
-from friday.config import FridayConfig, load_config
+from friday.config import FridayConfig, default_config_path, load_config
+from friday.conversation.delegation import CodeDelegate
 from friday.conversation.engine import ConversationEngine
 from friday.core.errors import ConfigError, FridayError
 from friday.core.logging import configure_logging
@@ -29,14 +30,43 @@ from friday.persona.persona import Channel, Mode, Persona
 log = logging.getLogger("friday")
 
 
+def _delegate(config: FridayConfig) -> CodeDelegate | None:
+    cc = config.claude_code
+    if not cc.enabled:
+        return None
+    from friday.integrations.claude_code import ClaudeCodeCLI
+
+    project = Path(cc.project_dir).expanduser()
+    if not cc.project_dir or not project.is_dir():
+        raise ConfigError(f"claude_code.project_dir is not a folder: '{cc.project_dir}'")
+    return CodeDelegate(
+        ClaudeCodeCLI(project, cc.command, cc.permission_mode, cc.timeout_s),
+        log_dir=default_config_path().parent / "claude-code",
+    )
+
+
 def _engine(config: FridayConfig, router: ProviderRouter, channel: Channel) -> ConversationEngine:
     return ConversationEngine(
-        router, Persona(user_name=config.user_name), channel=channel, mode=config.default_mode
+        router,
+        Persona(user_name=config.user_name),
+        channel=channel,
+        mode=config.default_mode,
+        delegate=_delegate(config),
     )
 
 
 async def _chat(config: FridayConfig, router: ProviderRouter) -> None:
     engine = _engine(config, router, Channel.TEXT)
+    if engine.delegate is not None:
+
+        def show(notice: object) -> None:
+            from friday.conversation.delegation import Notice
+
+            assert isinstance(notice, Notice)
+            engine.record_notice(notice.spoken, f"(asked Claude Code: {notice.task})")
+            print(f"\n[{notice.spoken}]\n  (full output: {notice.log_path})")
+
+        engine.delegate.on_done = show
     print("FRIDAY text chat. /work, /companion, /provider <name|auto>, /quit")
     while True:
         try:
@@ -241,7 +271,12 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
             max_no_speech_prob=v.stt_max_no_speech_prob,
             min_avg_logprob=v.stt_min_avg_logprob,
             cpu_threads=v.stt_cpu_threads,
-            vocabulary=("Friday", config.user_name, *v.stt_vocabulary),
+            vocabulary=(
+                "Friday",
+                config.user_name,
+                *(["Claude Code"] if engine.delegate else []),
+                *v.stt_vocabulary,
+            ),
         )
         tts = KokoroTTS(v.tts_model_path, v.tts_voices_path, voice=v.tts_voice, speed=v.tts_speed)
         # Pay every start-up cost now, not on the first thing the user says.
@@ -257,6 +292,17 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
             on_event=_print_voice_event,
         )
         print("Listening. Use a headset for now (no echo cancellation yet). Ctrl+C to quit.")
+    if engine.delegate is not None:
+
+        def announce(notice: object) -> None:
+            from friday.conversation.delegation import Notice
+
+            assert isinstance(notice, Notice)
+            print(f"  [Claude Code finished; full output: {notice.log_path}]")
+            context = f"(asked Claude Code: {notice.task})"
+            session.announce(lambda: engine.say(notice.spoken, context))
+
+        engine.delegate.on_done = announce
     await session.run()
 
 

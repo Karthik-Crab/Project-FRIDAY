@@ -49,14 +49,13 @@ import asyncio
 import contextlib
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from friday.conversation.engine import ConversationEngine
 from friday.core.errors import FridayError
-from friday.persona.commands import parse_command
 from friday.persona.persona import Mode
 from friday.voice.base import (
     AudioChunk,
@@ -187,6 +186,10 @@ class VoiceSession:
         self._turn_audible = False  # the active turn has started playing
         self._merges = 0  # restarts of the pending turn so far
         self._acks: list[tuple[str, AudioChunk]] = []
+        # Things FRIDAY wants to say unprompted (a background task finished).
+        self._notices: asyncio.Queue[Callable[[], AsyncGenerator[str, None]]] = asyncio.Queue()
+        self._turn_is_notice = False
+        self._transcribing = False
         self._ack_index = 0
         self._turn: asyncio.Task[None] | None = None
         self._interrupt_reason: str | None = None
@@ -203,6 +206,7 @@ class VoiceSession:
     async def run(self) -> None:
         await self.prepare()
         worker = asyncio.create_task(self._utterance_worker(), name="friday-utterances")
+        announcer = asyncio.create_task(self._announcer(), name="friday-notices")
         try:
             async for frame in self.source.frames():
                 self._on_frame(frame)
@@ -216,9 +220,42 @@ class VoiceSession:
                     await self._turn
         finally:
             worker.cancel()
+            announcer.cancel()
             await self._cancel_turn("shutdown")
-            with contextlib.suppress(asyncio.CancelledError):
-                await worker
+            for task in (worker, announcer):
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    def announce(self, stream: Callable[[], AsyncGenerator[str, None]]) -> None:
+        """Say something unprompted, as soon as nobody is talking."""
+        self._notices.put_nowait(stream)
+
+    def _idle(self) -> bool:
+        return not (
+            self._turn_active()
+            or self.segmenter.in_speech
+            or self._transcribing
+            or not self._utterances.empty()
+        )
+
+    async def _announcer(self) -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            stream = await self._notices.get()
+            while True:  # several conditions, none worth an Event each: poll
+                if self._idle():
+                    break
+                await asyncio.sleep(0.1)
+            self._interrupt_reason = None
+            self._stop_requested = False
+            self._turn_text = ""
+            self._turn_audible = False
+            self._turn_is_notice = True
+            self._merges = 0
+            metrics = TurnMetrics(endpoint_ms=0.0)
+            self._turn = asyncio.create_task(
+                self._run_turn("", loop.time(), metrics, stream()), name="friday-notice"
+            )
 
     async def prepare(self) -> None:
         """Synthesise the acknowledgement clips once, so they play instantly."""
@@ -262,7 +299,11 @@ class VoiceSession:
 
     def _pre_audio(self) -> bool:
         """The active turn has not made a sound yet (and is not a command)."""
-        return not self._turn_audible and not self.engine.last_turn.was_command
+        return (
+            not self._turn_audible
+            and not self._turn_is_notice
+            and not self.engine.last_turn.was_command
+        )
 
     # ---- frame loop -----------------------------------------------------
 
@@ -309,6 +350,7 @@ class VoiceSession:
         loop = asyncio.get_running_loop()
         while True:
             utterance, ended_at = await self._utterances.get()
+            self._transcribing = True
             try:
                 transcript = await self.stt.transcribe(utterance.pcm, utterance.sample_rate)
                 text = transcript.text.strip()
@@ -322,7 +364,8 @@ class VoiceSession:
                         self._set_state(VoiceState.LISTENING)
                     continue
                 if self._turn_active():
-                    if intent is ControlIntent.BACKCHANNEL or is_filler(text):
+                    answer = self.engine.awaiting_answer and not is_filler(text)
+                    if (intent is ControlIntent.BACKCHANNEL and not answer) or is_filler(text):
                         self._release()
                         continue
                     if intent is ControlIntent.STOP:
@@ -347,6 +390,7 @@ class VoiceSession:
                         self._set_state(VoiceState.LISTENING)
                         continue
                 if intent is ControlIntent.STOP:
+                    self.engine.dismiss_pending()
                     self._set_state(VoiceState.LISTENING)
                     continue
                 metrics = TurnMetrics(
@@ -356,6 +400,7 @@ class VoiceSession:
                 self._stop_requested = False
                 self._turn_text = text
                 self._turn_audible = False
+                self._turn_is_notice = False
                 self._turn = asyncio.create_task(
                     self._run_turn(text, ended_at, metrics), name="friday-turn"
                 )
@@ -366,6 +411,7 @@ class VoiceSession:
                 if not self._turn_active():
                     self._set_state(VoiceState.LISTENING)
             finally:
+                self._transcribing = False
                 self._utterances.task_done()
 
     # ---- turn -----------------------------------------------------------
@@ -380,12 +426,18 @@ class VoiceSession:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._turn
 
-    async def _run_turn(self, text: str, ended_at: float, metrics: TurnMetrics) -> None:
+    async def _run_turn(
+        self,
+        text: str,
+        ended_at: float,
+        metrics: TurnMetrics,
+        notice: AsyncGenerator[str, None] | None = None,
+    ) -> None:
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[object] = asyncio.Queue(maxsize=self.config.tts_queue_size)
         ack = self._pick_ack(text)
         producer = asyncio.create_task(
-            self._produce(text, queue, ended_at, metrics, ack[0] if ack else None)
+            self._produce(text, queue, ended_at, metrics, ack[0] if ack else None, notice)
         )
         heard: list[str] = []
         playing: tuple[str, float, float] | None = None  # text, start, duration
@@ -471,7 +523,7 @@ class VoiceSession:
             not self._acks
             or self.engine.mode is not Mode.COMPANION
             or len(text.split()) < self.config.ack_min_words
-            or parse_command(text) is not None
+            or self.engine.is_control(text)
         ):
             return None
         ack = self._acks[self._ack_index % len(self._acks)]
@@ -485,6 +537,7 @@ class VoiceSession:
         ended_at: float,
         metrics: TurnMetrics,
         ack_text: str | None = None,
+        notice: AsyncGenerator[str, None] | None = None,
     ) -> None:
         loop = asyncio.get_running_loop()
         chunker = SentenceChunker()
@@ -505,7 +558,7 @@ class VoiceSession:
                 await queue.put((cleaned, audio))
 
         try:
-            async with aclosing(self.engine.respond(text)) as stream:
+            async with aclosing(notice or self.engine.respond(text)) as stream:
                 async for delta in stream:
                     if metrics.first_token_ms is None:
                         metrics.first_token_ms = (loop.time() - ended_at) * 1000

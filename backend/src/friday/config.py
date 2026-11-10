@@ -83,6 +83,20 @@ class RealtimeSettings(_Strict):
     turn_detection: Literal["semantic_vad", "server_vad"] = "semantic_vad"
 
 
+class ClaudeCodeSettings(_Strict):
+    """Optional: pass spoken tasks on to Claude Code ("ask Claude Code to ...")."""
+
+    enabled: bool = False
+    # The folder Claude Code works in. It must exist.
+    project_dir: str = ""
+    command: str = "claude"
+    # "" leaves it to Claude Code's own settings for that folder. "plan" only
+    # reads and proposes; "acceptEdits" lets it change files there. Bypassing
+    # permissions altogether is deliberately not offered.
+    permission_mode: Literal["", "plan", "acceptEdits", "auto", "dontAsk"] = ""
+    timeout_s: float = Field(default=1800.0, ge=10, le=14_400)
+
+
 def _default_providers() -> dict[str, ProviderConfig]:
     return {"local": ProviderConfig(kind="ollama", model="llama3.2:3b")}
 
@@ -100,6 +114,7 @@ class FridayConfig(_Strict):
     routes: dict[str, list[str]] = Field(default_factory=_default_routes)
     voice: VoiceSettings = Field(default_factory=VoiceSettings)
     realtime: RealtimeSettings = Field(default_factory=RealtimeSettings)
+    claude_code: ClaudeCodeSettings = Field(default_factory=ClaudeCodeSettings)
 
     @model_validator(mode="after")
     def _check_routes(self) -> FridayConfig:

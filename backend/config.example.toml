@@ -75,3 +75,14 @@ acknowledgements = ["Hmm.", "Okay."]   # thinking sounds in companion mode; [] t
 model = "gpt-realtime"
 voice = "marin"
 turn_detection = "semantic_vad"   # waits for you to finish your thought
+
+# ---- claude_code: optional, pass spoken tasks on to Claude Code ------------
+# "Friday, ask Claude Code to ..." -> she reads it back -> you say yes -> it
+# runs in the background and she tells you the outcome. Needs Claude Code
+# installed and signed in on this machine (it uses that login, no API key).
+
+[claude_code]
+enabled = false
+project_dir = ""                 # the folder Claude Code works in, e.g. "C:/Users/you/Projects/my-app"
+permission_mode = ""             # "" = Claude Code's own settings; "plan" = read and propose only;
+                                 # "acceptEdits" = may change files in that folder

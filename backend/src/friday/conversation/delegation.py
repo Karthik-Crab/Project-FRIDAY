@@ -1,0 +1,184 @@
+"""Passing a spoken task on to a coding agent (Claude Code).
+
+Everything here is deterministic: a fixed phrase starts it ("ask Claude Code
+to ..."), FRIDAY reads the task back, and only a spoken "yes" sends it. The
+language model is not involved, so a small local model can never start a coding
+agent by mistake, and a misheard sentence is caught before anything runs.
+
+The work itself runs in the background; the conversation carries on, and a
+``Notice`` is delivered through ``on_done`` when the agent has finished.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+from friday.core.errors import FridayError
+from friday.integrations.claude_code import CodeAgent, CodeResult, spoken_summary
+
+log = logging.getLogger(__name__)
+
+# Speech recognisers write "Claude Code" in many ways.
+_NAME = r"(?:claude|claud|cloud|clod|clawed|claudia)(?:[\s-]*(?:code|coat|coda|cold))?"
+_SEP = r"[\s,.:;!?-]+"
+_LEAD = rf"^\W*(?:(?:hey|ok|okay){_SEP})?(?:friday{_SEP})?(?:please{_SEP})?"
+_DELEGATE = re.compile(
+    rf"{_LEAD}(?:(?:can|could|would){_SEP}you{_SEP})?(?:please{_SEP})?"
+    rf"(?:(?:ask|tell|get|have){_SEP}{_NAME}"
+    rf"|(?:send|pass|give|forward){_SEP}(?:(?:this|that|it){_SEP})?(?:on{_SEP})?to{_SEP}{_NAME})"
+    rf"{_SEP}(?:to{_SEP})?(?P<task>\S.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+_CANCEL = re.compile(
+    rf"{_LEAD}(?:cancel|stop|abort|kill){_SEP}(?:the{_SEP})?{_NAME}(?:{_SEP}(?:task|job))?\W*$",
+    re.IGNORECASE,
+)
+_FRESH = re.compile(
+    rf"{_LEAD}(?:start{_SEP})?(?:a{_SEP})?(?:new|fresh){_SEP}{_NAME}{_SEP}(?:session|chat)\W*$",
+    re.IGNORECASE,
+)
+_YES = re.compile(
+    r"^(?:yes|yeah|yep|yup|sure|correct|right|okay|ok|confirm|confirmed|send it|go ahead|"
+    r"do it|go|that s right|that s it|yes please|yes send it|please do)$"
+)
+_NO = re.compile(
+    r"^(?:no|nope|nah|wrong|cancel|cancel that|don t|do not|don t send it|forget it|"
+    r"scrap that|never ?mind|no thanks|no don t)$"
+)
+
+
+def _plain(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", text.lower())).strip()
+
+
+def parse_task(text: str) -> str | None:
+    match = _DELEGATE.match(text.strip())
+    return match.group("task").strip() if match else None
+
+
+@dataclass(frozen=True, slots=True)
+class Notice:
+    """What to tell the user when the agent has finished."""
+
+    task: str
+    spoken: str
+    ok: bool
+    log_path: Path | None = None
+
+
+class CodeDelegate:
+    def __init__(
+        self,
+        agent: CodeAgent,
+        log_dir: Path | None = None,
+        on_done: Callable[[Notice], None] | None = None,
+        name: str = "Claude Code",
+    ) -> None:
+        self.agent = agent
+        self.log_dir = log_dir
+        self.on_done = on_done
+        self.name = name
+        self.pending: str | None = None  # read back, waiting for "yes"
+        self.session_id: str | None = None  # follow-ups continue the same session
+        self._job: asyncio.Task[None] | None = None
+
+    @property
+    def busy(self) -> bool:
+        return self._job is not None and not self._job.done()
+
+    def concerns(self, text: str) -> bool:
+        """Would ``handle`` answer this itself (rather than the language model)?"""
+        return (
+            self.pending is not None
+            or parse_task(text) is not None
+            or bool(_CANCEL.match(text) or _FRESH.match(text))
+        )
+
+    def dismiss(self) -> None:
+        """The user said "stop": nothing is waiting to be sent any more."""
+        self.pending = None
+
+    def handle(self, text: str) -> str | None:
+        """Return FRIDAY's reply if this utterance is about the agent, else None."""
+        if _CANCEL.match(text):
+            self.pending = None
+            if not self.busy:
+                return f"{self.name} isn't working on anything."
+            assert self._job is not None
+            self._job.cancel()
+            return f"Okay, I've stopped {self.name}."
+        if _FRESH.match(text):
+            self.session_id = None
+            return f"Okay, the next task starts a fresh {self.name} session."
+        task = parse_task(text)
+        if task is not None:
+            if self.busy:
+                return (
+                    f"{self.name} is still working on the last task. "
+                    f"Say cancel {self.name} if you want to stop it."
+                )
+            self.pending = task
+            return self._read_back()
+        if self.pending is None:
+            return None
+        plain = _plain(text)
+        if _YES.match(plain):
+            task, self.pending = self.pending, None
+            self._job = asyncio.get_running_loop().create_task(self._run(task))
+            return f"Sent. I'll tell you when {self.name} is done."
+        if _NO.match(plain):
+            self.pending = None
+            return "Okay, I won't send it."
+        if len(plain.split()) < 3:  # "cool", "I see": not part of a task
+            return "Say yes to send it, or no to drop it."
+        # Neither yes nor no: they were still dictating.
+        self.pending = f"{self.pending} {text.strip()}"
+        return self._read_back()
+
+    def _read_back(self) -> str:
+        return f"For {self.name}: {self.pending} Shall I send it?"
+
+    async def _run(self, task: str) -> None:
+        try:
+            result = await self.agent.run(task, self.session_id)
+        except FridayError as exc:
+            log.error("code agent failed: %s", exc)
+            result = CodeResult(text=str(exc), ok=False)
+        except asyncio.CancelledError:
+            log.info("code agent task cancelled")
+            raise
+        if result.session_id:
+            self.session_id = result.session_id
+        path = self._write_log(task, result)
+        if result.ok:
+            spoken = f"{self.name} is done. {spoken_summary(result.text)}"
+        else:
+            spoken = f"{self.name} ran into a problem. {spoken_summary(result.text)}"
+        if self.on_done is not None:
+            try:
+                self.on_done(Notice(task=task, spoken=spoken.strip(), ok=result.ok, log_path=path))
+            except Exception:  # a broken listener must not lose the result
+                log.exception("code agent listener failed")
+
+    def _write_log(self, task: str, result: CodeResult) -> Path | None:
+        if self.log_dir is None:
+            return None
+        try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+            path = self.log_dir / f"{datetime.now():%Y%m%d-%H%M%S}.md"
+            path.write_text(
+                f"# Task\n\n{task}\n\n# Result ({'ok' if result.ok else 'failed'}, "
+                f"{result.denied} actions refused by its permission settings)\n\n"
+                f"{result.text}\n",
+                encoding="utf-8",
+            )
+            return path
+        except OSError as exc:
+            log.warning("could not save the code agent log: %s", exc)
+            return None

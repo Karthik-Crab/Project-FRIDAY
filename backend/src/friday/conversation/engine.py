@@ -12,6 +12,7 @@ from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from dataclasses import dataclass, field
 
+from friday.conversation.delegation import CodeDelegate
 from friday.conversation.memory import INTERRUPTED_MARKER, ConversationWindow
 from friday.core.errors import ProviderError
 from friday.core.messages import ChatRequest, Role
@@ -55,6 +56,7 @@ class ConversationEngine:
         channel: Channel = Channel.TEXT,
         mode: Mode = Mode.COMPANION,
         max_tokens: dict[Channel, int] | None = None,
+        delegate: CodeDelegate | None = None,
     ) -> None:
         self.router = router
         self.persona = persona or Persona()
@@ -63,13 +65,58 @@ class ConversationEngine:
         self.mode = mode
         self._max_tokens = max_tokens or {Channel.VOICE: 400, Channel.TEXT: 1500}
         self.last_turn = TurnInfo(mode=mode)
+        self.delegate = delegate
+
+    def is_control(self, text: str) -> bool:
+        """Answered by FRIDAY's own fixed logic, not by the language model."""
+        if parse_command(text) is not None:
+            return True
+        return self.delegate is not None and self.delegate.concerns(text)
+
+    @property
+    def awaiting_answer(self) -> bool:
+        """FRIDAY asked a yes/no question, so "yes" is an answer, not a murmur."""
+        return self.delegate is not None and self.delegate.pending is not None
+
+    def dismiss_pending(self) -> None:
+        if self.delegate is not None:
+            self.delegate.dismiss()
+
+    async def say(self, text: str, context: str | None = None) -> AsyncGenerator[str, None]:
+        """Speak something FRIDAY decided to say herself (a finished task).
+
+        It is stored in history, with ``context`` as the user side, so the
+        user can ask about it afterwards.
+        """
+        self.record_notice(text, context)
+        yield text
+
+    def record_notice(self, text: str, context: str | None = None) -> None:
+        turn = TurnInfo(mode=self.mode)
+        self.last_turn = turn
+        self.window.add_user(context or "(no message)")
+        self.window.add_assistant(text)
+        turn.user_stored = turn.stored = True
+        turn.full_text = text
 
     def build_request(self) -> ChatRequest:
         return ChatRequest(
-            system=self.persona.system_prompt(self.mode, self.channel),
+            system=self.persona.system_prompt(self.mode, self.channel, self._extra_context()),
             messages=self.window.messages,
             max_tokens=self._max_tokens[self.channel],
             temperature=0.8 if self.mode is Mode.COMPANION else 0.4,
+        )
+
+    def _extra_context(self) -> str | None:
+        if self.delegate is None:
+            return None
+        name = self.delegate.name
+        return (
+            f"One exception to the limits above: {name}, a coding agent on this laptop, can "
+            f"be given tasks. That only happens when {self.persona.user_name} says "
+            f'"ask {name} to ..." and then confirms; it is handled for you. Never claim '
+            f"{name} did something unless its result appears in this conversation, and "
+            "never pretend to do coding work yourself."
         )
 
     async def respond(self, user_text: str) -> AsyncGenerator[str, None]:
@@ -94,6 +141,14 @@ class ConversationEngine:
             turn.full_text = ack
             yield ack
             return  # commands are control, not conversation: not stored in history
+
+        if self.delegate is not None:
+            reply = self.delegate.handle(user_text)
+            if reply is not None:  # also control, not conversation
+                turn.was_command = True
+                turn.full_text = reply
+                yield reply
+                return
 
         self.window.add_user(user_text)
         turn.user_stored = True
