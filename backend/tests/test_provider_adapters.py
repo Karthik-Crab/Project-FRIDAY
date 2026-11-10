@@ -126,3 +126,23 @@ async def test_connection_error_maps_to_provider_error() -> None:
     with pytest.raises(ProviderError):
         await collect(p)
     assert await p.health_check() is False
+
+
+async def test_cloud_adapters_omit_temperature_unless_asked() -> None:
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        if request.url.path.endswith("/messages"):
+            return httpx.Response(200, text='data: {"type": "message_stop"}\n\n')
+        return httpx.Response(200, text="data: [DONE]\n\n")
+
+    c = client(handler, "https://api.test/v1")
+    await collect(OpenAICompatProvider("a", "m", "k", client=c))
+    await collect(OpenAICompatProvider("b", "m", "k", client=c, send_temperature=True))
+    await collect(OpenAICompatProvider("c", "m", "k", client=c, max_tokens_field="max_tokens"))
+    await collect(AnthropicProvider("d", "m", "k", client=c))
+    assert "temperature" not in bodies[0] and bodies[0]["max_completion_tokens"] == 50
+    assert bodies[1]["temperature"] == REQ.temperature
+    assert bodies[2]["max_tokens"] == 50 and "max_completion_tokens" not in bodies[2]
+    assert "temperature" not in bodies[3]

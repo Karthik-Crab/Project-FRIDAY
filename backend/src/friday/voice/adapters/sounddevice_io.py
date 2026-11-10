@@ -8,12 +8,12 @@ until AEC lands (docs/RISKS.md, R1).
 from __future__ import annotations
 
 import asyncio
-import threading
 from collections.abc import AsyncIterator
 from typing import Any
 
 from friday.core.errors import VoiceError
 from friday.voice.base import AudioChunk, AudioFrame
+from friday.voice.playback import PlaybackBuffer
 
 
 def _sd() -> Any:
@@ -60,54 +60,81 @@ class MicrophoneSource:
 
 
 class SpeakerSink:
-    """Plays one chunk at a time on a PortAudio output stream; ``stop`` is immediate."""
+    """Gapless playback on one long-lived output stream.
+
+    The stream stays open for the whole session and pulls from a
+    ``PlaybackBuffer``, so sentences join without the click/pause of opening a
+    device per sentence, and ``stop`` takes effect on the next audio callback
+    (a few milliseconds) because it just empties the buffer.
+
+    Besides the chunk-at-a-time ``play`` used by the cascaded pipeline, it has
+    ``write``/``flush`` for backends that stream audio in small pieces
+    (speech-to-speech).
+    """
 
     def __init__(self, device: int | str | None = None) -> None:
         self._device = device
-        self._stop = threading.Event()
+        self._buffer = PlaybackBuffer()
+        self._stream: Any = None
+        self._rate = 0
+
+    def _ensure_stream(self, sample_rate: int) -> None:
+        if self._stream is not None and self._rate == sample_rate:
+            return
+        self.close()
+        sd = _sd()
+
+        def callback(outdata: Any, frames: int, time: Any, status: Any) -> None:
+            outdata[:] = self._buffer.read(len(outdata))
+
+        self._stream = sd.RawOutputStream(
+            samplerate=sample_rate,
+            device=self._device,
+            channels=1,
+            dtype="int16",
+            latency="low",
+            callback=callback,
+        )
+        self._rate = sample_rate
+        self._stream.start()
 
     async def play(self, chunk: AudioChunk) -> float:
-        sd = _sd()
-        self._stop.clear()
+        self._ensure_stream(chunk.sample_rate)
         loop = asyncio.get_running_loop()
         done: asyncio.Future[float] = loop.create_future()
-        data = chunk.pcm
-        total = len(data)
-        pos = 0
 
         def finish(fraction: float) -> None:
             if not done.done():
                 done.set_result(fraction)
 
-        def callback(outdata: Any, frames: int, time: Any, status: Any) -> None:
-            nonlocal pos
-            n = frames * 2
-            if self._stop.is_set():
-                outdata[:] = b"\x00" * len(outdata)
-                raise sd.CallbackStop
-            piece = data[pos : pos + n]
-            outdata[: len(piece)] = piece
-            if len(piece) < n:
-                outdata[len(piece) :] = b"\x00" * (n - len(piece))
-                pos = total
-                raise sd.CallbackStop
-            pos += n
+        def on_done(fraction: float) -> None:  # runs on the audio thread
+            loop.call_soon_threadsafe(finish, fraction)
 
-        stream = sd.RawOutputStream(
-            samplerate=chunk.sample_rate,
-            device=self._device,
-            channels=1,
-            dtype="int16",
-            callback=callback,
-            finished_callback=lambda: loop.call_soon_threadsafe(
-                finish, min(1.0, pos / total) if total else 1.0
-            ),
-        )
-        with stream:
-            try:
-                return await done
-            finally:
-                self._stop.set()
+        self._buffer.write(chunk.pcm, on_done=on_done)
+        try:
+            return await done
+        except asyncio.CancelledError:
+            self._buffer.clear()
+            raise
+
+    def write(self, pcm: bytes, sample_rate: int) -> None:
+        """Queue audio without waiting (streaming backends)."""
+        self._ensure_stream(sample_rate)
+        self._buffer.write(pcm)
+
+    def flush(self) -> int:
+        """Drop everything not yet played; returns the number of bytes dropped."""
+        return self._buffer.clear()
+
+    @property
+    def pending_bytes(self) -> int:
+        return self._buffer.pending
 
     def stop(self) -> None:
-        self._stop.set()
+        self._buffer.clear()
+
+    def close(self) -> None:
+        if self._stream is not None:
+            self._stream.abort()
+            self._stream.close()
+            self._stream = None

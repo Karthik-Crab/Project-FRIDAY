@@ -22,9 +22,11 @@ class AnthropicProvider:
         model: str,
         api_key: str | None,
         base_url: str = "https://api.anthropic.com",
+        send_temperature: bool = False,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._info = ProviderInfo(name=name, kind="anthropic", model=model, local=False)
+        self._send_temperature = send_temperature
         headers = {"anthropic-version": API_VERSION}
         if api_key:
             headers["x-api-key"] = api_key
@@ -39,11 +41,10 @@ class AnthropicProvider:
     async def stream(self, request: ChatRequest) -> AsyncGenerator[str, None]:
         # The Messages API requires the first message to be from the user and
         # roles to alternate; the conversation engine guarantees that.
-        payload = {
+        payload: dict[str, object] = {
             "model": self._info.model,
             "stream": True,
             "max_tokens": request.max_tokens,
-            "temperature": request.temperature,
             "system": request.system,
             "messages": [
                 {"role": m.role.value, "content": m.content}
@@ -51,6 +52,8 @@ class AnthropicProvider:
                 if m.role is not Role.SYSTEM
             ],
         }
+        if self._send_temperature:
+            payload["temperature"] = request.temperature
         try:
             async with self._client.stream("POST", "/v1/messages", json=payload) as response:
                 if response.status_code >= 400:

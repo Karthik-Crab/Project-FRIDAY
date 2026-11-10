@@ -265,3 +265,75 @@ async def test_stt_failure_is_reported_and_session_survives() -> None:
     await asyncio.wait_for(session.run(), 10)
     assert of(events, vs.VoiceErrorEvent)
     assert of(events, vs.UserSaid)[0].text == "hello again"
+
+
+async def test_noise_pauses_then_answer_resumes_in_full() -> None:
+    """A long noise (empty transcript) must not kill the answer."""
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),
+            WaitFor(lambda: sink.is_playing),
+            Speak(700),  # long enough to trigger a hold
+            Silence(900),
+            WaitFor(lambda: bool(of(events, vs.TurnFinished)), timeout_s=30),
+        ],
+        ["Tell me about octopuses", ""],
+        sink_speed=5.0,
+    )
+    await asyncio.wait_for(session.run(), 30)
+    assert of(events, vs.Interrupted) == []
+    assert [f.interrupted for f in of(events, vs.TurnFinished)] == [False]
+    assert sink.played[0] < 1.0  # it really was paused mid-sentence
+    spoken = " ".join(e.text for e in of(events, vs.AssistantSaid))
+    assert spoken.split() == LONG_REPLY.split()  # nothing lost, nothing duplicated
+    assert not engine.window.messages[-1].content.endswith(INTERRUPTED_MARKER)
+
+
+async def test_long_backchannel_pauses_then_resumes() -> None:
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),
+            WaitFor(lambda: sink.is_playing),
+            Speak(700),
+            Silence(900),
+            WaitFor(lambda: bool(of(events, vs.TurnFinished)), timeout_s=30),
+        ],
+        ["Tell me about octopuses", "Yeah, okay."],
+        sink_speed=5.0,
+    )
+    await asyncio.wait_for(session.run(), 30)
+    assert of(events, vs.Interrupted) == []
+    assert len(provider.requests) == 1
+
+
+async def test_stop_works_even_if_the_sink_swallows_cancellation() -> None:
+    """Regression: asyncio.wait_for before Python 3.12 can swallow a cancel."""
+
+    class SwallowingSink(FakeAudioSink):
+        async def play(self, chunk):  # type: ignore[no-untyped-def]
+            try:
+                return await super().play(chunk)
+            except asyncio.CancelledError:
+                return 0.0
+
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),
+            WaitFor(lambda: sink.is_playing),
+            Speak(300),
+            Silence(900),
+            WaitFor(lambda: not session._turn_active(), timeout_s=5),
+        ],
+        ["Tell me about octopuses", "Stop."],
+        sink_speed=1.0,
+    )
+    swallowing = SwallowingSink(speed=1.0)
+    session.sink = sink = swallowing  # the lambdas above read `sink`
+    await asyncio.wait_for(session.run(), 15)
+    assert [i.reason for i in of(events, vs.Interrupted)] == ["stop"]

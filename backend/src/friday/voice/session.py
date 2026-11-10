@@ -17,10 +17,18 @@ Concurrency model (single asyncio loop):
   chunks and synthesises sentences into a small queue while the consumer plays
   them, so sentence N+1 is synthesised while sentence N is playing.
 
-Barge-in: if the user speaks for ``barge_in_min_ms`` while a turn is active,
-the turn is cancelled and playback stops within one frame. The engine's
-history is rewritten to what the user actually heard, so FRIDAY never assumes
-they heard the rest of the answer.
+Barge-in is two-stage, so noise and "mm-hmm" do not kill an answer:
+
+1. *Hold*: when the user has spoken for ``barge_in_min_ms`` while a turn is
+   active, playback is silenced within one frame and the turn is paused.
+2. *Decide*, once the utterance is transcribed: real speech cancels the turn
+   (history is rewritten to what the user actually heard) and starts a new
+   one; "stop" cancels without a reply; an empty transcript or a backchannel
+   resumes the answer from the sentence that was cut.
+
+Stopping never relies on task cancellation alone: an explicit flag is checked
+after every chunk, because ``asyncio.wait_for`` before Python 3.12 (and any
+library that catches ``CancelledError``) can swallow a cancellation.
 """
 
 from __future__ import annotations
@@ -153,6 +161,11 @@ class VoiceSession:
         self._utterances: asyncio.Queue[tuple[UtteranceEnded, float]] = asyncio.Queue()
         self._turn: asyncio.Task[None] | None = None
         self._interrupt_reason: str | None = None
+        self._stop_requested = False  # explicit, cancellation-independent stop
+        self._resume = asyncio.Event()  # cleared while a turn is on hold
+        self._resume.set()
+        self._hold_count = 0  # bumped on every hold; detects a cut chunk
+        self._held_at: float | None = None
         self.state = VoiceState.LISTENING
         self.speaking = False
 
@@ -181,8 +194,28 @@ class VoiceSession:
         """Stop the current turn now (also usable from a UI button)."""
         if self._turn is not None and not self._turn.done():
             self._interrupt_reason = reason
+            self._stop_requested = True
             self.sink.stop()
             self._turn.cancel()
+
+    @property
+    def on_hold(self) -> bool:
+        return self._turn_active() and not self._resume.is_set()
+
+    def _hold(self) -> None:
+        """Silence playback but keep the turn, until we know what the user said."""
+        if self._turn_active() and self._resume.is_set():
+            self._resume.clear()
+            self._hold_count += 1
+            self._held_at = asyncio.get_running_loop().time()
+            self.sink.stop()
+            self._set_state(VoiceState.USER_SPEAKING)
+
+    def _release(self) -> None:
+        """False alarm (noise or a backchannel): carry on speaking."""
+        if self.on_hold:
+            self._held_at = None
+            self._resume.set()
 
     # ---- frame loop -----------------------------------------------------
 
@@ -200,8 +233,9 @@ class VoiceSession:
             and self._turn_active()
             and self.segmenter.speech_ms >= self.config.barge_in_min_ms
         ):
-            log.debug("barge-in after %.0f ms of speech", self.segmenter.speech_ms)
-            self.interrupt("barge_in")
+            if not self.on_hold:
+                log.debug("holding after %.0f ms of speech", self.segmenter.speech_ms)
+            self._hold()
 
     def _handle_segment_event(self, event: object) -> None:
         if isinstance(event, SpeechStarted):
@@ -223,6 +257,7 @@ class VoiceSession:
                 stt_ms = (loop.time() - ended_at) * 1000
                 text = transcript.text.strip()
                 if not text:
+                    self._release()  # noise, not speech
                     if not self._turn_active():
                         self._set_state(VoiceState.LISTENING)
                     continue
@@ -230,6 +265,7 @@ class VoiceSession:
                 intent = classify(text)
                 if self._turn_active():
                     if intent is ControlIntent.BACKCHANNEL:
+                        self._release()
                         continue
                     await self._cancel_turn("stop" if intent is ControlIntent.STOP else "barge_in")
                 if intent is ControlIntent.STOP:
@@ -239,13 +275,16 @@ class VoiceSession:
                     endpoint_ms=self.config.segmenter.end_silence_ms, stt_ms=stt_ms
                 )
                 self._interrupt_reason = None
+                self._stop_requested = False
                 self._turn = asyncio.create_task(
                     self._run_turn(text, ended_at, metrics), name="friday-turn"
                 )
             except FridayError as exc:
                 log.error("speech recognition failed: %s", exc)
                 self._emit(VoiceErrorEvent(f"speech recognition failed: {exc}"))
-                self._set_state(VoiceState.LISTENING)
+                self._release()
+                if not self._turn_active():
+                    self._set_state(VoiceState.LISTENING)
             finally:
                 self._utterances.task_done()
 
@@ -268,9 +307,15 @@ class VoiceSession:
         heard: list[str] = []
         playing: tuple[str, float, float] | None = None  # text, start, duration
         self._set_state(VoiceState.THINKING)
+
+        def check_stop() -> None:
+            if self._stop_requested:
+                raise asyncio.CancelledError
+
         try:
             while True:
                 item = await queue.get()
+                check_stop()
                 if item is _END:
                     break
                 if isinstance(item, BaseException):
@@ -278,12 +323,19 @@ class VoiceSession:
                 assert isinstance(item, tuple)
                 chunk_text, audio = item
                 assert isinstance(audio, AudioChunk)
-                if metrics.first_audio_ms is None:
-                    metrics.first_audio_ms = (loop.time() - ended_at) * 1000
-                self.speaking = True
-                self._set_state(VoiceState.SPEAKING)
-                playing = (chunk_text, loop.time(), audio.duration_s)
-                await self.sink.play(audio)
+                while True:  # replays the chunk if a hold cut it short
+                    await self._resume.wait()
+                    check_stop()
+                    if metrics.first_audio_ms is None:
+                        metrics.first_audio_ms = (loop.time() - ended_at) * 1000
+                    self.speaking = True
+                    self._set_state(VoiceState.SPEAKING)
+                    holds = self._hold_count
+                    playing = (chunk_text, loop.time(), audio.duration_s)
+                    await self.sink.play(audio)
+                    check_stop()
+                    if self._hold_count == holds:
+                        break
                 playing = None
                 heard.append(chunk_text)
                 self._emit(AssistantSaid(chunk_text))
@@ -296,7 +348,8 @@ class VoiceSession:
                 await producer
             if playing is not None:
                 chunk_text, started, duration = playing
-                fraction = (loop.time() - started) / duration if duration > 0 else 1.0
+                stopped = self._held_at if self._held_at is not None else loop.time()
+                fraction = (stopped - started) / duration if duration > 0 else 1.0
                 heard.append(_truncate_words(chunk_text, fraction))
             heard_text = " ".join(h for h in heard if h)
             self.engine.record_interruption(heard_text)
@@ -313,6 +366,8 @@ class VoiceSession:
         finally:
             self.sink.stop()
             self.speaking = False
+            self._held_at = None
+            self._resume.set()
             self._set_state(
                 VoiceState.USER_SPEAKING if self.segmenter.in_speech else VoiceState.LISTENING
             )

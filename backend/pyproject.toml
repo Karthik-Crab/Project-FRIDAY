@@ -20,12 +20,15 @@ voice = [
     "faster-whisper>=1.0",
     "kokoro-onnx>=0.4",
 ]
+# Optional speech-to-speech voice (OpenAI Realtime API). Needs internet + API key.
+realtime = ["websockets>=13", "sounddevice>=0.4.6"]
 secrets = ["keyring>=24"]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
     "mypy>=1.10",
+    "websockets>=13",
 ]
 
 [project.scripts]

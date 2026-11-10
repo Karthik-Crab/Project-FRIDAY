@@ -29,12 +29,24 @@ def build_provider(name: str, cfg: ProviderConfig, secrets: SecretStore) -> LLMP
         )
         if not api_key and not local:
             raise ConfigError(f"provider '{name}': no API key found for '{cfg.api_key_name}'")
-        return OpenAICompatProvider(name, cfg.model, api_key, base_url=base, local=local)
+        return OpenAICompatProvider(
+            name,
+            cfg.model,
+            api_key,
+            base_url=base,
+            local=local,
+            send_temperature=bool(cfg.send_temperature),
+            max_tokens_field=cfg.max_tokens_field,
+        )
     if cfg.kind == "anthropic":
         if not api_key:
             raise ConfigError(f"provider '{name}': no API key found for '{cfg.api_key_name}'")
         return AnthropicProvider(
-            name, cfg.model, api_key, base_url=cfg.base_url or "https://api.anthropic.com"
+            name,
+            cfg.model,
+            api_key,
+            base_url=cfg.base_url or "https://api.anthropic.com",
+            send_temperature=bool(cfg.send_temperature),
         )
     raise ConfigError(f"unknown provider kind {cfg.kind!r}")  # pragma: no cover
 

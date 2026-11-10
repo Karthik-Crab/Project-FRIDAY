@@ -18,7 +18,8 @@ Principles:
   before merging changes to `voice/session.py`.
 - **No network or hardware in CI.** Every external dependency has a fake.
 - **CI runs on Windows and Ubuntu**, Python 3.11 and 3.13, with ruff, `mypy --strict`
-  and pytest.
+  and pytest. Run both Python versions locally before pushing changes to
+  `voice/session.py`: asyncio cancellation differs between them.
 
 Run locally:
 
@@ -56,4 +57,10 @@ Record for each step: pass/fail, the latency line FRIDAY prints, and notes.
 10. Turn Wi-Fi off, ask a question: she still answers through Ollama. (A8)
 11. Collect 20 turns of latency lines. The median of `endpoint + first audio` should
     be under 1.5 s. (A9)
-12. Search the logs for your API key prefix (`sk-`): no matches. (A10)
+12. Cough or tap the desk for a second during a long answer: she pauses, then carries
+    on from the sentence she was in. Say "yeah, okay": same. (A11)
+13. Realtime mode: `pip install -e ".[realtime]"`, store an OpenAI API key under
+    `openai`, run `friday voice --realtime`. Hold a short conversation, interrupt
+    once, say "Friday, work mode". Note any `[error: ...]` line exactly as printed.
+    Compare how it sounds with step 3. (A12)
+14. Search the logs for your API key prefix (`sk-`): no matches. (A10)

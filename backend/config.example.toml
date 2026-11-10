@@ -16,7 +16,7 @@ log_level = "INFO"
 
 [providers.local]
 kind = "ollama"
-model = "llama3.1:8b"        # any model you have pulled with `ollama pull`
+model = "llama3.2:3b"        # small enough to answer quickly on a CPU-only laptop
 
 [providers.claude]
 kind = "anthropic"
@@ -49,7 +49,8 @@ offline = ["local"]
 
 [voice]
 stt_model = "small.en"           # faster-whisper size; "base.en" for slower CPUs
-stt_device = "auto"              # "cuda" if you have an NVIDIA GPU
+stt_device = "cpu"               # no NVIDIA GPU: CPU with int8 is the fast path
+stt_compute_type = "int8"
 tts_model_path = "models/kokoro-v1.0.onnx"
 tts_voices_path = "models/voices-v1.0.bin"
 tts_voice = "af_heart"
@@ -58,3 +59,13 @@ end_silence_ms = 700             # pause length that ends your turn
 barge_in_min_ms = 400            # how long you must speak to interrupt
 # input_device = 1               # see: python -m sounddevice
 # output_device = 3
+
+# ---- realtime: optional speech-to-speech voice (friday voice --realtime) ---
+# One model listens and speaks directly: the most natural-sounding option, but
+# it needs internet and is billed per minute of audio on your OpenAI API account
+# (separate from a ChatGPT subscription). Uses the key stored as "openai".
+
+[realtime]
+model = "gpt-realtime"
+voice = "marin"
+turn_detection = "semantic_vad"   # waits for you to finish your thought

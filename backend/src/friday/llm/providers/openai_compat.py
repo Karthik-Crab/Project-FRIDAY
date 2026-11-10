@@ -26,9 +26,13 @@ class OpenAICompatProvider:
         api_key: str | None,
         base_url: str = "https://api.openai.com/v1",
         local: bool = False,
+        send_temperature: bool = False,
+        max_tokens_field: str = "max_completion_tokens",
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._info = ProviderInfo(name=name, kind="openai", model=model, local=local)
+        self._send_temperature = send_temperature
+        self._max_tokens_field = max_tokens_field
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self._client = client or httpx.AsyncClient(
             base_url=base_url, headers=headers, timeout=DEFAULT_TIMEOUT
@@ -39,14 +43,15 @@ class OpenAICompatProvider:
         return self._info
 
     async def stream(self, request: ChatRequest) -> AsyncGenerator[str, None]:
-        payload = {
+        payload: dict[str, object] = {
             "model": self._info.model,
             "stream": True,
-            "max_completion_tokens": request.max_tokens,
-            "temperature": request.temperature,
+            self._max_tokens_field: request.max_tokens,
             "messages": [{"role": "system", "content": request.system}]
             + [{"role": m.role.value, "content": m.content} for m in request.messages],
         }
+        if self._send_temperature:
+            payload["temperature"] = request.temperature
         try:
             async with self._client.stream("POST", "/chat/completions", json=payload) as response:
                 if response.status_code >= 400:

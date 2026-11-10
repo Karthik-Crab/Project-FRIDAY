@@ -64,19 +64,42 @@ These are the rules that keep the system replaceable. Breaking one needs an ADR.
    while sentence N plays.
 5. `TurnMetrics` records STT, first-token and first-audio latency for every turn.
 
-### Barge-in
+### Barge-in (two-stage)
 
-While a turn is active the frame loop keeps running. When the user has spoken for
-`barge_in_min_ms` (400 ms), with a stricter VAD threshold while FRIDAY is talking:
+While a turn is active the frame loop keeps running.
 
-1. `sink.stop()` silences audio immediately and the turn task is cancelled.
-2. The producer is cancelled. The engine's reply generator is closed explicitly,
-   which closes the provider's HTTP stream, so a cloud model stops generating
-   (and billing).
-3. The words actually played are estimated from playback time, and the engine
-   rewrites the assistant message to that text plus an `[interrupted]` marker. The
-   model is told (in the voice persona rules) that the user only heard that part.
-4. When the interrupting utterance ends, it becomes the next turn.
+1. **Hold.** When the user has spoken for `barge_in_min_ms` (400 ms), playback is
+   silenced on the next audio callback and the turn is paused. Nothing is thrown away
+   yet.
+2. **Decide**, when the utterance has been transcribed:
+   - real speech → the turn is cancelled and the utterance becomes the next turn;
+   - "stop" → the turn is cancelled, no reply;
+   - an empty transcript (noise) or a backchannel ("mm-hmm", "yeah okay") → the turn
+     resumes from the sentence that was cut.
+
+On cancel, the engine's reply generator is closed explicitly, which closes the
+provider's HTTP stream, so a cloud model stops generating (and billing). The words
+actually played are estimated from playback time up to the hold, and the engine
+rewrites the assistant message to that text plus an `[interrupted]` marker.
+
+Stopping never relies on task cancellation alone. `asyncio.wait_for` before Python
+3.12, and any library that catches `CancelledError`, can swallow a cancel, so an
+explicit stop flag is checked after every chunk.
+
+### Playback
+
+`SpeakerSink` keeps one output stream open for the session and feeds it from
+`voice/playback.py` (`PlaybackBuffer`). Sentences join without gaps, and stopping is
+just emptying the buffer.
+
+### Speech-to-speech mode (optional)
+
+`voice/realtime_openai.py` is an alternative session for `friday voice --realtime`.
+One cloud model hears the audio and speaks the reply, with turn detection on the
+server. It sends FRIDAY's persona as the session instructions, applies spoken mode
+commands with a session update, and on barge-in flushes local audio and tells the
+server how many milliseconds were actually heard. It emits the same events as
+`VoiceSession`. It does not share the cascaded engine's conversation window yet.
 
 ### Provider routing
 

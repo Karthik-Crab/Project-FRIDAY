@@ -27,6 +27,8 @@ class FasterWhisperSTT:
         compute_type: str = "default",
         language: str | None = "en",
         beam_size: int = 1,
+        max_no_speech_prob: float = 0.6,
+        min_avg_logprob: float = -1.0,
         model: Any = None,  # injectable for tests
     ) -> None:
         if model is None:
@@ -40,6 +42,8 @@ class FasterWhisperSTT:
         self._model = model
         self._language = language
         self._beam = beam_size
+        self._max_no_speech = max_no_speech_prob
+        self._min_logprob = min_avg_logprob
 
     async def transcribe(self, pcm: bytes, sample_rate: int) -> Transcript:
         if sample_rate != 16_000:
@@ -61,5 +65,15 @@ class FasterWhisperSTT:
             condition_on_previous_text=False,
         )
         # ``segments`` is a lazy generator: iterating it does the actual work.
-        text = " ".join(s.text.strip() for s in segments).strip()
+        # Whisper invents plausible text ("Thank you.") on noise. Its own scores
+        # say when: a segment that is probably not speech AND low-confidence is
+        # dropped. Segments without scores (other backends, stubs) are kept.
+        kept = []
+        for seg in segments:
+            no_speech = getattr(seg, "no_speech_prob", 0.0)
+            logprob = getattr(seg, "avg_logprob", 0.0)
+            if no_speech > self._max_no_speech and logprob < self._min_logprob:
+                continue
+            kept.append(seg.text.strip())
+        text = " ".join(t for t in kept if t).strip()
         return Transcript(text=text, language=getattr(info, "language", None))

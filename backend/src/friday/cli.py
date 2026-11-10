@@ -3,6 +3,8 @@
 friday chat                 text conversation (streams replies)
 friday voice                live voice conversation (needs friday[voice])
 friday voice --simulate     scripted voice session with fake audio/models
+friday voice --realtime     speech-to-speech via the OpenAI Realtime API
+                            (needs friday[realtime], internet and an API key)
 friday providers            check which providers are reachable
 """
 
@@ -16,7 +18,7 @@ from pathlib import Path
 
 from friday.config import FridayConfig, load_config
 from friday.conversation.engine import ConversationEngine
-from friday.core.errors import FridayError
+from friday.core.errors import ConfigError, FridayError
 from friday.core.logging import configure_logging
 from friday.core.secrets import KeyringEnvSecretStore
 from friday.llm.factory import build_router
@@ -95,6 +97,34 @@ def _print_voice_event(event: object) -> None:
         log.debug("state -> %s", event.state)
 
 
+async def _voice_realtime(config: FridayConfig) -> None:
+    from friday.voice.adapters.sounddevice_io import MicrophoneSource, SpeakerSink
+    from friday.voice.realtime_openai import SAMPLE_RATE, OpenAIRealtimeSession
+
+    rt = config.realtime
+    api_key = KeyringEnvSecretStore().get(rt.api_key_name)
+    if not api_key:
+        raise ConfigError(f"realtime voice: no API key stored under '{rt.api_key_name}'")
+    sink = SpeakerSink(config.voice.output_device)
+    session = OpenAIRealtimeSession(
+        MicrophoneSource(config.voice.input_device, sample_rate=SAMPLE_RATE),
+        sink,
+        api_key,
+        model=rt.model,
+        voice=rt.voice,
+        persona=Persona(user_name=config.user_name),
+        mode=config.default_mode,
+        transcription_model=rt.transcription_model,
+        turn_detection=rt.turn_detection,
+        on_event=_print_voice_event,
+    )
+    print("Realtime voice. Use a headset (no echo cancellation yet). Ctrl+C to quit.")
+    try:
+        await session.run()
+    finally:
+        sink.close()
+
+
 async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -> None:
     from friday.voice.base import SpeechToText, TextToSpeech
     from friday.voice.segmenter import SegmenterConfig
@@ -145,7 +175,12 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
 
         print("Loading speech models...")
         stt = FasterWhisperSTT(
-            v.stt_model, device=v.stt_device, compute_type=v.stt_compute_type, language=v.language
+            v.stt_model,
+            device=v.stt_device,
+            compute_type=v.stt_compute_type,
+            language=v.language,
+            max_no_speech_prob=v.stt_max_no_speech_prob,
+            min_avg_logprob=v.stt_min_avg_logprob,
         )
         tts = KokoroTTS(v.tts_model_path, v.tts_voices_path, voice=v.tts_voice, speed=v.tts_speed)
         session = VoiceSession(
@@ -171,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("chat")
     voice = sub.add_parser("voice")
     voice.add_argument("--simulate", action="store_true")
+    voice.add_argument("--realtime", action="store_true", help="speech-to-speech (cloud)")
     sub.add_parser("providers")
     args = parser.parse_args(argv)
 
@@ -185,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
             router.set_override(args.provider)
         if args.command == "chat":
             asyncio.run(_chat(config, router))
+        elif args.command == "voice" and args.realtime:
+            asyncio.run(_voice_realtime(config))
         elif args.command == "voice":
             asyncio.run(_voice(config, router, args.simulate))
         else:

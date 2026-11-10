@@ -170,3 +170,18 @@ async def test_kokoro_adapter_converts_to_pcm16() -> None:
 def test_pcm_roundtrip_helpers() -> None:
     pcm = float_to_pcm16([0.25])
     assert abs(pcm16_to_float32(pcm)[0] - 0.25) < 1e-3
+
+
+async def test_whisper_adapter_drops_low_confidence_noise_segments() -> None:
+    class Noisy:
+        def transcribe(self, audio, **kwargs):  # type: ignore[no-untyped-def]
+            def seg(text: str, no_speech: float, logprob: float):  # type: ignore[no-untyped-def]
+                return type(
+                    "S", (), {"text": text, "no_speech_prob": no_speech, "avg_logprob": logprob}
+                )()
+
+            segments = [seg(" Thank you.", 0.9, -1.4), seg(" Open the report.", 0.1, -0.3)]
+            return iter(segments), type("I", (), {"language": "en"})()
+
+    result = await FasterWhisperSTT(model=Noisy()).transcribe(tone(100), 16_000)
+    assert result.text == "Open the report."

@@ -4,10 +4,11 @@ A personal AI desktop companion for Windows: natural voice conversation,
 provider-independent (OpenAI, Anthropic, Ollama and more), local-first, built in
 tested phases.
 
-> **Status: Phase 1 (voice conversation prototype).** The core engine and the
-> full-duplex voice pipeline with barge-in are implemented, and the automated tests
-> pass. The real microphone, Whisper and Kokoro adapters are written but **not yet
-> verified on hardware**. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: Phase 1 (voice conversation prototype).** The core engine, the
+> full-duplex voice pipeline with barge-in, and an optional speech-to-speech mode are
+> implemented, and the automated tests pass on Python 3.11 and 3.13. The real
+> microphone, Whisper and Kokoro adapters, and the live Realtime API connection, are
+> written but **not yet verified on hardware or against the live service**. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Documents
 
@@ -53,7 +54,7 @@ Text chat with a local model. Install [Ollama](https://ollama.com) and pull a mo
 first:
 
 ```bash
-ollama pull llama3.1:8b
+ollama pull llama3.2:3b
 ```
 
 ```bash
@@ -77,6 +78,22 @@ Then download `kokoro-v1.0.onnx` and `voices-v1.0.bin` into `backend/models/`, c
 
 ```bash
 friday voice
+```
+
+Speech-to-speech mode (the most natural-sounding option; needs internet and an
+OpenAI API key, billed per use and separate from a ChatGPT subscription; not yet
+verified against the live API):
+
+```bash
+pip install -e ".[realtime]"
+```
+
+```bash
+python -c "import keyring, getpass; keyring.set_password('friday', 'openai', getpass.getpass('key: '))"
+```
+
+```bash
+friday voice --realtime
 ```
 
 API keys are stored in Windows Credential Manager, never in the config file:

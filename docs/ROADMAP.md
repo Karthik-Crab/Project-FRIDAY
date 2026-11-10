@@ -14,6 +14,8 @@ before building any UI.
 | M1.1 Core | Provider protocol, Ollama/OpenAI/Anthropic adapters, router with fallback, persona and modes, short-term memory, conversation engine, text CLI | ✅ implemented, automated tests pass |
 | M1.2 Voice pipeline | VAD, segmenter, chunker, sanitizer, full-duplex session, barge-in, stop/backchannel handling, latency metrics, `voice --simulate` | ✅ implemented, automated tests pass |
 | M1.3 Real devices | faster-whisper STT, kokoro-onnx TTS, sounddevice mic/speaker adapters | ⚠️ written and unit-tested with stubs; **not yet run on hardware** |
+| M1.3b Review fixes | Python 3.11 interrupt bug; two-stage barge-in (hold, then decide); gapless single-stream playback; Whisper noise filtering; cloud adapters no longer force `temperature`; spoken-style persona rules; CPU-only defaults | ✅ implemented, automated tests pass on 3.11 and 3.13 |
+| M1.3c Speech-to-speech mode | `friday voice --realtime` on the OpenAI Realtime API | ⚠️ tested against a local stand-in server only; **not yet run against the live API** |
 | M1.4 Hardware tuning | Run the manual acceptance script; tune thresholds; measure latency; decide on AEC approach (R1) and whether a neural VAD (Silero) is needed | ⏳ next |
 | M1.5 Phase 1 sign-off | All acceptance criteria below pass on the laptop | ⏳ |
 
@@ -30,6 +32,8 @@ before building any UI.
 | A7 | "Friday, work mode" / "Friday, companion mode" switch tone instantly, offline | `test_voice_mode_switch`, `test_mode_switch_is_local_instant_and_not_in_history` + **(manual)** |
 | A8 | Cloud provider down → falls back to local; no internet → still converses | `test_router.py` + **(manual, Wi-Fi off)** |
 | A9 | Median perceived latency < 1.5 s with a cloud LLM | **(manual)**, `TurnMetrics` output |
+| A11 | Noise or "yeah, okay" while FRIDAY talks pauses her briefly, then she continues | `test_noise_pauses_then_answer_resumes_in_full`, `test_long_backchannel_pauses_then_resumes` + **(manual)** |
+| A12 | Realtime mode holds a conversation and can be interrupted | `test_realtime_openai.py` (protocol only) + **(manual, needs API key)** |
 | A10 | No API key appears in logs | `test_security.py` + **(manual log grep)** |
 
 ## Later phases (outline, refined when we get there)
