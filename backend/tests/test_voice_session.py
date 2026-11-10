@@ -36,7 +36,7 @@ def long_then_short(request):  # type: ignore[no-untyped-def]
     return LONG_REPLY if len(request.messages) == 1 else "Yes, three hearts."
 
 
-def build(steps, transcripts, reply=LONG_REPLY, sink_speed=20.0, llm_delay=0.001):  # type: ignore[no-untyped-def]
+def build(steps, transcripts, reply=LONG_REPLY, sink_speed=20.0, llm_delay=0.001, config=None):  # type: ignore[no-untyped-def]
     provider = FakeProvider("fake", reply=reply, delay=llm_delay)
     engine = ConversationEngine(
         ProviderRouter({"fake": provider}, {"default": ["fake"]}), channel=Channel.VOICE
@@ -51,6 +51,7 @@ def build(steps, transcripts, reply=LONG_REPLY, sink_speed=20.0, llm_delay=0.001
         ScriptedSTT(transcripts),
         tts,
         sink,
+        config,
         on_event=events.append,
     )
     return session, engine, provider, sink, tts, events
@@ -420,3 +421,95 @@ async def test_yes_into_silence_is_an_answer_not_a_filler() -> None:
     )
     await asyncio.wait_for(session.run(), 10)
     assert len(provider.requests) == 1
+
+
+# ---- found on the second hardware run ---------------------------------------
+
+
+async def test_okay_before_any_audio_does_not_restart_the_reply() -> None:
+    """A filler while FRIDAY is still thinking must not throw the turn away."""
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),
+            Speak(500),  # "Okay." before anything was said
+            Silence(900),
+            WaitFor(lambda: len(done(events)) >= 1, timeout_s=10),
+        ],
+        ["How do I find out how to do this?", "Okay."],
+        reply="Start with the manual.",
+        llm_delay=0.2,
+    )
+    await asyncio.wait_for(session.run(), 20)
+
+    assert of(events, vs.Interrupted) == []
+    assert len(provider.requests) == 1
+    assert tts.spoken == ["Start with the manual."]
+
+
+async def test_merging_is_capped_so_background_voices_cannot_silence_friday() -> None:
+    steps: list[object] = [Silence(300), Speak(800), Silence(900)]
+    for _ in range(4):  # other people keep talking in the room
+        steps += [Speak(600), Silence(900)]
+    steps.append(WaitFor(lambda: len(done(events)) >= 1, timeout_s=10))
+    session, engine, provider, sink, tts, events = build(
+        steps,
+        ["What should I cook tonight?", "Something quick.", "With rice.", "Blah one.", "Blah two."],
+        reply="Fried rice, then.",
+        llm_delay=0.4,
+    )
+    await asyncio.wait_for(session.run(), 30)
+
+    assert [e.reason for e in of(events, vs.Interrupted)] == ["merge", "merge"]
+    assert len(done(events)) == 1
+    asked = provider.requests[-1].messages[-1].content
+    assert asked == "What should I cook tonight? Something quick. With rice."
+    assert " ".join(tts.spoken) == "Fried rice, then."
+
+
+async def test_acknowledgement_plays_first_and_is_not_repeated_by_the_reply() -> None:
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),
+            WaitFor(lambda: len(done(events)) >= 1, timeout_s=10),
+        ],
+        ["Tell me something about octopuses."],
+        reply="Hmm, good question. They have three hearts.",
+        config=vs.VoiceConfig(acknowledgements=("Hmm.", "Okay.")),
+    )
+    await asyncio.wait_for(session.run(), 20)
+
+    # both clips are prepared up front; the reply does not say "Hmm" again
+    assert tts.spoken == ["Hmm.", "Okay.", "Good question.", "They have three hearts."]
+    assert len(sink.played) == 3  # the clip, then two sentences
+    metrics = done(events)[0].metrics
+    assert metrics.ack_ms is not None and metrics.ack_ms <= (metrics.first_audio_ms or 0)
+    # the sound is not part of the conversation
+    assert engine.window.messages[1].content == "Hmm, good question. They have three hearts."
+
+
+async def test_no_acknowledgement_for_short_answers_commands_or_work_mode() -> None:
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(500),
+            Silence(900),
+            WaitFor(lambda: len(done(events)) >= 1, timeout_s=10),
+            Speak(700),
+            Silence(900),
+            WaitFor(lambda: len(done(events)) >= 2, timeout_s=10),
+            Speak(900),
+            Silence(900),
+            WaitFor(lambda: len(done(events)) >= 3, timeout_s=10),
+        ],
+        ["Yes please.", "Friday, switch to work mode.", "What is the status of the build?"],
+        reply="Done.",
+        config=vs.VoiceConfig(acknowledgements=("Hmm.",)),
+    )
+    await asyncio.wait_for(session.run(), 20)
+
+    assert engine.mode is Mode.WORK
+    assert [e.metrics.ack_ms for e in done(events)] == [None, None, None]

@@ -64,6 +64,13 @@ class VoiceSettings(_Strict):
     barge_in_min_ms: float = Field(default=300.0, ge=100, le=3000)
     speech_threshold: float = Field(default=0.5, ge=0.05, le=0.99)
     speech_threshold_while_speaking: float = Field(default=0.6, ge=0.05, le=0.99)
+    # Sounds quieter than this (dBFS) are never treated as speech. Measure with
+    # `friday mic` and set it between the background and your own voice.
+    min_speech_db: float = Field(default=-50.0, ge=-100.0, le=0.0)
+    # Restarts allowed when you speak again before FRIDAY has answered.
+    max_merges: int = Field(default=2, ge=0, le=10)
+    # Thinking sounds played the moment you finish (companion mode). [] = off.
+    acknowledgements: list[str] = Field(default_factory=lambda: ["Hmm.", "Okay."])
 
 
 class RealtimeSettings(_Strict):

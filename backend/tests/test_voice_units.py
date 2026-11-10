@@ -223,3 +223,40 @@ async def test_kokoro_adapter_reuses_one_worker_thread() -> None:
     await tts.warm_up()
     await asyncio.gather(tts.synthesize("one"), tts.synthesize("two"))
     assert len(names) == 1 and next(iter(names)).startswith("friday-tts")
+
+
+# ---- second hardware run ----------------------------------------------------
+
+
+def test_short_opening_sentence_is_spoken_at_once_but_not_a_lone_word_clause() -> None:
+    c = SentenceChunker()
+    assert c.feed("Oh, nice. That sounds ") == ["Oh, nice."]
+    c = SentenceChunker()
+    assert c.feed("Well, I think that ") == []
+
+
+def test_stage_directions_are_not_read_out() -> None:
+    s = SpeechSanitizer()
+    assert s.clean("*laughs* That is a good one.") == "That is a good one."
+    assert s.clean("Oh no (sighs) not again.") == "Oh no not again."
+    assert s.clean("That is *really* good (I mean it).") == "That is really good (I mean it)."
+
+
+def test_sounds_below_the_absolute_level_are_never_speech() -> None:
+    from friday.voice.base import AudioFrame
+    from friday.voice.fakes import SAMPLE_RATE, tone
+    from friday.voice.vad import EnergyVAD, frame_dbfs
+
+    loud = tone(20)
+    quiet = (np.frombuffer(loud, dtype="<i2") // 64).astype("<i2").tobytes()  # -36 dB
+    level = frame_dbfs(quiet)
+    silence = AudioFrame(b"\x00\x00" * (len(loud) // 2), SAMPLE_RATE)
+
+    def score(vad: EnergyVAD, pcm: bytes) -> float:
+        for _ in range(200):  # a driver that mutes silence: floor at digital zero
+            vad.speech_probability(silence)
+        return vad.speech_probability(AudioFrame(pcm, SAMPLE_RATE))
+
+    assert score(EnergyVAD(), quiet) == 1.0  # the problem seen on the laptop
+    assert score(EnergyVAD(min_speech_db=level + 6), quiet) == 0.0
+    assert score(EnergyVAD(min_speech_db=level + 6), loud) == 1.0

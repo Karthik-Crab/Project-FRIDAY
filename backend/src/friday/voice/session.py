@@ -28,8 +28,15 @@ Barge-in is two-stage, so noise and "mm-hmm" do not kill an answer:
 
 If the user speaks again *before the reply has produced any audio*, they were
 not interrupting, they were still mid-thought (the pause was just longer than
-the endpoint). That turn is abandoned at once, which also frees the CPU for
-transcription, and its text is merged with what they say next into one turn.
+the endpoint). The pending turn is held like any other, and once the transcript
+is known: real words are merged with the pending text into one new turn; noise,
+"okay" or "hmm" let the pending turn carry on untouched. Merging is capped
+(``max_merges``), so a room full of other voices cannot postpone the reply for
+ever.
+
+Acknowledgements: people say "Hmm" or "Okay" the moment they start thinking.
+When clips are configured, one is played as soon as a turn starts, which fills
+the silence while the model and the voice produce the real first sentence.
 
 Stopping never relies on task cancellation alone: an explicit flag is checked
 after every chunk, because ``asyncio.wait_for`` before Python 3.12 (and any
@@ -41,6 +48,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 from collections.abc import Callable
 from contextlib import aclosing
 from dataclasses import dataclass, field
@@ -48,6 +56,8 @@ from enum import StrEnum
 
 from friday.conversation.engine import ConversationEngine
 from friday.core.errors import FridayError
+from friday.persona.commands import parse_command
+from friday.persona.persona import Mode
 from friday.voice.base import (
     AudioChunk,
     AudioFrame,
@@ -79,6 +89,13 @@ class VoiceConfig:
     speech_threshold_while_speaking: float = 0.6
     barge_in_min_ms: float = 300.0
     tts_queue_size: int = 2
+    # How many times a pending reply may be restarted because the user (or a
+    # voice in the background) spoke again before it produced any audio.
+    max_merges: int = 2
+    # Short sounds played the moment a turn starts, in companion mode, for
+    # utterances of at least ``ack_min_words`` words. Empty: none.
+    acknowledgements: tuple[str, ...] = ()
+    ack_min_words: int = 4
     segmenter: SegmenterConfig = field(default_factory=SegmenterConfig)
 
 
@@ -124,6 +141,7 @@ class TurnMetrics:
     stt_ms: float = 0.0
     first_token_ms: float | None = None
     first_audio_ms: float | None = None
+    ack_ms: float | None = None  # when the acknowledgement sound started
     provider: str | None = None
 
 
@@ -164,11 +182,12 @@ class VoiceSession:
         self.config = config or VoiceConfig()
         self.segmenter = UtteranceSegmenter(self.config.segmenter)
         self._on_event = on_event
-        # None instead of an utterance means "speech started but came to nothing".
-        self._utterances: asyncio.Queue[tuple[UtteranceEnded | None, float]] = asyncio.Queue()
+        self._utterances: asyncio.Queue[tuple[UtteranceEnded, float]] = asyncio.Queue()
         self._turn_text = ""  # what the active turn is answering
         self._turn_audible = False  # the active turn has started playing
-        self._carry: str | None = None  # text of a turn abandoned mid-thought
+        self._merges = 0  # restarts of the pending turn so far
+        self._acks: list[tuple[str, AudioChunk]] = []
+        self._ack_index = 0
         self._turn: asyncio.Task[None] | None = None
         self._interrupt_reason: str | None = None
         self._stop_requested = False  # explicit, cancellation-independent stop
@@ -182,6 +201,7 @@ class VoiceSession:
     # ---- public ---------------------------------------------------------
 
     async def run(self) -> None:
+        await self.prepare()
         worker = asyncio.create_task(self._utterance_worker(), name="friday-utterances")
         try:
             async for frame in self.source.frames():
@@ -199,6 +219,17 @@ class VoiceSession:
             await self._cancel_turn("shutdown")
             with contextlib.suppress(asyncio.CancelledError):
                 await worker
+
+    async def prepare(self) -> None:
+        """Synthesise the acknowledgement clips once, so they play instantly."""
+        if self._acks or not self.config.acknowledgements:
+            return
+        try:
+            for text in self.config.acknowledgements:
+                self._acks.append((text, await self.tts.synthesize(text)))
+        except FridayError as exc:  # a nicety, never a reason not to start
+            log.warning("acknowledgement sounds unavailable: %s", exc)
+            self._acks = []
 
     def interrupt(self, reason: str = "barge_in") -> None:
         """Stop the current turn now (also usable from a UI button)."""
@@ -221,18 +252,17 @@ class VoiceSession:
             self.sink.stop()
             self._set_state(VoiceState.USER_SPEAKING)
 
-    def _abandon(self) -> None:
-        """The user kept talking before we answered: drop the turn, keep its text."""
-        log.debug("user still speaking before any audio: merging turns")
-        self._carry = self._turn_text
-        self.interrupt("merge")
-        self._set_state(VoiceState.USER_SPEAKING)
-
     def _release(self) -> None:
         """False alarm (noise or a backchannel): carry on speaking."""
         if self.on_hold:
             self._held_at = None
             self._resume.set()
+            if not self._turn_audible:
+                self._set_state(VoiceState.THINKING)
+
+    def _pre_audio(self) -> bool:
+        """The active turn has not made a sound yet (and is not a command)."""
+        return not self._turn_audible and not self.engine.last_turn.was_command
 
     # ---- frame loop -----------------------------------------------------
 
@@ -249,11 +279,11 @@ class VoiceSession:
             self.segmenter.in_speech
             and self._turn_active()
             and self.segmenter.speech_ms >= self.config.barge_in_min_ms
+            and not self.on_hold
         ):
-            if not self._turn_audible and not self.engine.last_turn.was_command:
-                if self._carry is None:
-                    self._abandon()
-            elif not self.on_hold:
+            if self._pre_audio() and self._merges >= self.config.max_merges:
+                pass  # restarted often enough: answer what we have
+            else:
                 log.debug(
                     "holding after %.0f ms of speech (p=%.2f, threshold=%.2f)",
                     self.segmenter.speech_ms,
@@ -268,12 +298,10 @@ class VoiceSession:
                 self._set_state(VoiceState.USER_SPEAKING)
         elif isinstance(event, UtteranceEnded):
             self._utterances.put_nowait((event, asyncio.get_running_loop().time()))
-        elif self._carry is not None:
-            # Too short to transcribe, but a turn was abandoned for it: let the
-            # worker restart that turn.
-            self._utterances.put_nowait((None, asyncio.get_running_loop().time()))
         elif not self._turn_active():
             self._set_state(VoiceState.LISTENING)
+        elif self._utterances.empty():
+            self._release()  # too short to mean anything
 
     # ---- utterance worker ----------------------------------------------
 
@@ -282,41 +310,42 @@ class VoiceSession:
         while True:
             utterance, ended_at = await self._utterances.get()
             try:
-                text = ""
-                if utterance is not None:
-                    transcript = await self.stt.transcribe(utterance.pcm, utterance.sample_rate)
-                    text = transcript.text.strip()
+                transcript = await self.stt.transcribe(utterance.pcm, utterance.sample_rate)
+                text = transcript.text.strip()
                 stt_ms = (loop.time() - ended_at) * 1000
                 intent = classify(text) if text else None
                 if text:
                     self._emit(UserSaid(text))
-                if self._carry is not None:
-                    # The previous turn was abandoned because the user went on
-                    # talking. Answer the whole thought as one turn.
-                    carry, self._carry = self._carry, None
-                    await self._cancel_turn("merge")  # make sure it has unwound
-                    if intent is ControlIntent.STOP:
-                        self._set_state(VoiceState.LISTENING)
-                        continue
-                    if not text or intent is ControlIntent.BACKCHANNEL or is_filler(text):
-                        text = carry  # nothing new was said: answer the original
-                    else:
-                        text = f"{carry} {text}"
-                    intent = None
-                elif not text:
+                if not text:
                     self._release()  # noise, not speech
                     if not self._turn_active():
                         self._set_state(VoiceState.LISTENING)
                     continue
-                elif self._turn_active():
-                    if intent is ControlIntent.BACKCHANNEL:
+                if self._turn_active():
+                    if intent is ControlIntent.BACKCHANNEL or is_filler(text):
                         self._release()
                         continue
-                    await self._cancel_turn("stop" if intent is ControlIntent.STOP else "barge_in")
-                elif is_filler(text):
-                    # "Hmm." into silence is not a question; do not answer it.
-                    self._set_state(VoiceState.LISTENING)
-                    continue
+                    if intent is ControlIntent.STOP:
+                        await self._cancel_turn("stop")
+                    elif not self._pre_audio():
+                        await self._cancel_turn("barge_in")
+                        self._merges = 0
+                    elif self._merges >= self.config.max_merges:
+                        log.debug("merge limit reached, not restarting for: %r", text)
+                        self._release()
+                        continue
+                    else:
+                        # The user went on talking before we answered: answer
+                        # the whole thought as one turn.
+                        text = f"{self._turn_text} {text}"
+                        await self._cancel_turn("merge")
+                        self._merges += 1
+                else:
+                    self._merges = 0
+                    if is_filler(text):
+                        # "Hmm." into silence is not a question; do not answer it.
+                        self._set_state(VoiceState.LISTENING)
+                        continue
                 if intent is ControlIntent.STOP:
                     self._set_state(VoiceState.LISTENING)
                     continue
@@ -354,7 +383,10 @@ class VoiceSession:
     async def _run_turn(self, text: str, ended_at: float, metrics: TurnMetrics) -> None:
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[object] = asyncio.Queue(maxsize=self.config.tts_queue_size)
-        producer = asyncio.create_task(self._produce(text, queue, ended_at, metrics))
+        ack = self._pick_ack(text)
+        producer = asyncio.create_task(
+            self._produce(text, queue, ended_at, metrics, ack[0] if ack else None)
+        )
         heard: list[str] = []
         playing: tuple[str, float, float] | None = None  # text, start, duration
         self._set_state(VoiceState.THINKING)
@@ -364,6 +396,13 @@ class VoiceSession:
                 raise asyncio.CancelledError
 
         try:
+            if ack is not None:
+                await self._resume.wait()
+                check_stop()
+                metrics.ack_ms = (loop.time() - ended_at) * 1000
+                self.speaking = True
+                await self.sink.play(ack[1])
+                check_stop()
             while True:
                 item = await queue.get()
                 check_stop()
@@ -427,15 +466,37 @@ class VoiceSession:
                 VoiceState.USER_SPEAKING if self.segmenter.in_speech else VoiceState.LISTENING
             )
 
+    def _pick_ack(self, text: str) -> tuple[str, AudioChunk] | None:
+        if (
+            not self._acks
+            or self.engine.mode is not Mode.COMPANION
+            or len(text.split()) < self.config.ack_min_words
+            or parse_command(text) is not None
+        ):
+            return None
+        ack = self._acks[self._ack_index % len(self._acks)]
+        self._ack_index += 1
+        return ack
+
     async def _produce(
-        self, text: str, queue: asyncio.Queue[object], ended_at: float, metrics: TurnMetrics
+        self,
+        text: str,
+        queue: asyncio.Queue[object],
+        ended_at: float,
+        metrics: TurnMetrics,
+        ack_text: str | None = None,
     ) -> None:
         loop = asyncio.get_running_loop()
         chunker = SentenceChunker()
         sanitizer = SpeechSanitizer()
+        first = True
 
         async def speak(piece: str) -> None:
+            nonlocal first
             cleaned = sanitizer.clean(piece)
+            if first and ack_text:
+                cleaned = _drop_echo(cleaned, ack_text)  # not "Hmm. Hmm, ..."
+            first = False
             if cleaned:
                 # While the user is talking over us, do not compete with speech
                 # recognition for the CPU; synthesise again once that is settled.
@@ -481,3 +542,16 @@ def _truncate_words(text: str, fraction: float) -> str:
     words = text.split()
     keep = int(len(words) * max(0.0, min(1.0, fraction)))
     return " ".join(words[:keep])
+
+
+_LEADING_WORD = re.compile(r"\W*(\w+)\W*")
+
+
+def _drop_echo(piece: str, ack: str) -> str:
+    """Remove a first word that repeats the acknowledgement just played."""
+    said = _LEADING_WORD.match(ack)
+    lead = _LEADING_WORD.match(piece)
+    if said is None or lead is None or lead.group(1).lower() != said.group(1).lower():
+        return piece
+    rest = piece[lead.end() :]
+    return rest[:1].upper() + rest[1:]

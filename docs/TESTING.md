@@ -45,6 +45,9 @@ Record for each step: pass/fail, the latency line FRIDAY prints, and notes.
 0. `friday mic`, speak normally: the speech score should pass 0.6 while you talk and
    stay near 0 when you are quiet. If it does not, note the numbers; interruption
    cannot work until it does (tune `speech_threshold_while_speaking`).
+   The last line shows how loud you are in dB. Run it again without speaking while
+   the usual background (TV, other people) is on, and set `min_speech_db` in the
+   config about halfway between the two "loud parts" numbers.
 1. `friday providers`: every configured provider shows OK.
 2. `friday voice`, say "Hi Friday, how's it going?". You get a short, natural spoken
    reply with no markdown read aloud. (A1)
@@ -73,3 +76,11 @@ Record for each step: pass/fail, the latency line FRIDAY prints, and notes.
     once, say "Friday, work mode". Note any `[error: ...]` line exactly as printed.
     Compare how it sounds with step 3. (A12)
 14. Search the logs for your API key prefix (`sk-`): no matches. (A10)
+15. Ask a question of five words or more and pause. A short "Hmm." or "Okay." should
+    come almost at once, then the answer. It should not sound like a glitch and the
+    answer should not repeat the same word.
+16. Ask something, then say "okay" before she starts: she answers the question once.
+17. With a TV or another person talking in the background, ask a question: she
+    answers within a few seconds instead of staying silent.
+18. Ask "Do you have internet access?", "What were we talking about yesterday?" and
+    "Turn the brightness down": she says she cannot, without inventing anything.

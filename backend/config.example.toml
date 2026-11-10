@@ -60,6 +60,9 @@ tts_speed = 1.0
 end_silence_ms = 700             # pause length that ends your turn
 barge_in_min_ms = 300            # how long you must speak to interrupt
 # speech_threshold_while_speaking = 0.6   # check your mic with: friday mic
+min_speech_db = -50              # quieter than this is never speech (other voices, TV)
+max_merges = 2                   # restarts allowed if you speak again before the reply
+acknowledgements = ["Hmm.", "Okay."]   # thinking sounds in companion mode; [] turns them off
 # input_device = 1               # see: python -m sounddevice
 # output_device = 3
 

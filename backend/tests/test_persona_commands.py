@@ -46,3 +46,9 @@ def test_system_prompt_is_provider_independent_and_mode_specific() -> None:
     assert "markdown is fine" in p.system_prompt(Mode.WORK, Channel.TEXT)
     for vendor in ("OpenAI", "Anthropic", "Claude", "Ollama", "GPT"):
         assert vendor not in companion
+
+
+def test_prompt_states_what_friday_cannot_do() -> None:
+    prompt = Persona().system_prompt(Mode.COMPANION, Channel.VOICE)
+    for phrase in ("cannot use\nthe internet", "remember\nearlier sessions", "stage directions"):
+        assert phrase in prompt

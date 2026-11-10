@@ -82,10 +82,25 @@ compete with speech recognition for the CPU.
 
 **Still mid-thought.** If the user speaks again before the reply has produced any
 audio, they were not interrupting: their pause was just longer than the endpoint.
-The turn is abandoned immediately (freeing the CPU), the engine forgets it
-(`discard_turn`), and its text is joined with the next utterance into one turn. If
-the next utterance turns out to be noise, the original question is asked again
-unchanged.
+The pending turn is put on hold like any other. Once the new utterance is
+transcribed: real words cancel the turn, the engine forgets it (`discard_turn`),
+and both texts are joined into one new turn; noise, "okay" or "hmm" release the
+hold and the pending reply carries on without being regenerated. At most
+`max_merges` (2) restarts are allowed per reply; after that, speech before the
+first audio is ignored, so other voices in the room cannot postpone the answer
+for ever (this happened on the second hardware run).
+
+**Acknowledgements.** In companion mode, for utterances of four words or more, a
+short pre-synthesised clip ("Hmm.", "Okay.") is played the moment the turn starts,
+while the model and the voice are still producing the first real sentence. The
+clip is not part of the conversation history, and if the reply itself opens with
+the same word, that word is dropped. FRIDAY making sounds *while the user is still
+talking* is deliberately not done yet: it needs reliable speech detection first.
+
+**Absolute level gate.** `min_speech_db` makes the energy VAD ignore anything
+quieter than a fixed level. It exists because the laptop's microphone driver mutes
+silence completely, which leaves the adaptive noise floor at digital zero and makes
+every faint sound look like speech.
 
 **Fillers.** "Hmm" or "uh" with nothing else is never treated as a turn, whether or
 not FRIDAY is speaking. "Yes" and "okay" are backchannels only while she is

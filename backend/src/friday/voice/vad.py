@@ -41,12 +41,17 @@ class EnergyVAD:
         initial_floor_db: float = -60.0,
         min_floor_db: float = -90.0,
         floor_window_s: float = 3.0,
+        min_speech_db: float | None = None,
     ) -> None:
         self._margin = margin_db
         self._soft = softness_db
         self._initial = initial_floor_db
         self._min_floor = min_floor_db
         self._window_s = floor_window_s
+        # Absolute gate. Some microphone drivers mute silence completely, so
+        # the floor is near digital zero and *any* sound, however faint, looks
+        # loud next to it. Frames below this level are never speech.
+        self._min_speech = min_speech_db
         self._levels: deque[float] | None = None
         self.noise_floor_db = initial_floor_db
 
@@ -60,6 +65,8 @@ class EnergyVAD:
         if len(self._levels) < (self._levels.maxlen or 0):
             lowest = min(lowest, self._initial)  # not enough history yet
         self.noise_floor_db = max(self._min_floor, lowest)
+        if self._min_speech is not None and db < self._min_speech:
+            return 0.0
         snr = db - self.noise_floor_db
         return min(1.0, max(0.0, (snr - self._margin) / (2 * self._soft) + 0.5))
 

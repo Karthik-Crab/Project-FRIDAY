@@ -92,7 +92,9 @@ def _print_voice_event(event: object) -> None:
         if event.interrupted and m.first_audio_ms is None:
             return  # nothing was spoken, so there is no latency to report
         print(
-            f"  [stt {m.stt_ms:.0f} ms | first token {m.first_token_ms or 0:.0f} ms | "
+            f"  [stt {m.stt_ms:.0f} ms | "
+            + (f"ack {m.ack_ms:.0f} ms | " if m.ack_ms is not None else "")
+            + f"first token {m.first_token_ms or 0:.0f} ms | "
             f"first audio {m.first_audio_ms or 0:.0f} ms | endpoint {m.endpoint_ms:.0f} ms | "
             f"{m.provider}]"
         )
@@ -115,10 +117,11 @@ async def _mic(config: FridayConfig, seconds: float) -> None:
     from friday.voice.vad import EnergyVAD, frame_dbfs
 
     v = config.voice
-    vad = EnergyVAD()
+    vad = EnergyVAD(min_speech_db=v.min_speech_db)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + seconds
     peak = 0.0
+    levels: list[float] = []  # every frame
     print(
         f"Speak normally for {seconds:.0f} s. Speech should pass {v.speech_threshold:.2f} "
         f"(and {v.speech_threshold_while_speaking:.2f} to interrupt); silence should stay near 0."
@@ -127,6 +130,7 @@ async def _mic(config: FridayConfig, seconds: float) -> None:
     async for frame in MicrophoneSource(v.input_device).frames():
         prob = vad.speech_probability(frame)
         peak = max(peak, prob)
+        levels.append(frame_dbfs(frame.pcm))
         count += 1
         if count % 5 == 0:  # about ten lines a second
             bar = "#" * round(prob * 30)
@@ -139,6 +143,14 @@ async def _mic(config: FridayConfig, seconds: float) -> None:
         if loop.time() >= deadline:
             break
     print(f"\nHighest speech score: {peak:.2f}")
+    if levels:
+        levels.sort()
+        loud = levels[int(len(levels) * 0.9)]
+        print(
+            f"Level: loudest {levels[-1]:.1f} dB, loud parts (90th percentile) {loud:.1f} dB, "
+            f"middle {levels[len(levels) // 2]:.1f} dB. Sounds below min_speech_db "
+            f"({v.min_speech_db:.0f} dB) are ignored."
+        )
 
 
 async def _voice_realtime(config: FridayConfig) -> None:
@@ -180,6 +192,8 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
         speech_threshold=v.speech_threshold,
         speech_threshold_while_speaking=v.speech_threshold_while_speaking,
         barge_in_min_ms=v.barge_in_min_ms,
+        max_merges=v.max_merges,
+        acknowledgements=tuple(v.acknowledgements),
         segmenter=SegmenterConfig(end_silence_ms=v.end_silence_ms),
     )
     engine = _engine(config, router, Channel.VOICE)
@@ -235,7 +249,7 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
         session = VoiceSession(
             engine,
             MicrophoneSource(v.input_device),
-            EnergyVAD(),
+            EnergyVAD(min_speech_db=v.min_speech_db),
             stt,
             tts,
             SpeakerSink(v.output_device),

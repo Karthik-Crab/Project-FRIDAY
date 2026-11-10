@@ -16,9 +16,16 @@ _CLAUSE_END = re.compile("[,;:\u2013\u2014](?=\\s)")  # incl. en/em dash
 
 class SentenceChunker:
     def __init__(
-        self, first_min_chars: int = 10, min_chars: int = 40, max_chars: int = 250
+        self,
+        first_min_chars: int = 4,
+        min_chars: int = 40,
+        max_chars: int = 250,
+        first_clause_min_chars: int = 10,
     ) -> None:
+        # A short opening sentence ("Oh, nice.") is spoken at once; a clause
+        # must be a little longer, or a lone "Well," gets its own odd pause.
         self._first_min = first_min_chars
+        self._first_clause_min = first_clause_min_chars
         self._min = min_chars
         self._max = max_chars
         self._buf = ""
@@ -55,7 +62,7 @@ class SentenceChunker:
             return self._cut(end)
         if not self._emitted_any:
             for match in _CLAUSE_END.finditer(self._buf):
-                if match.end() >= self._first_min:
+                if match.end() >= self._first_clause_min:
                     return self._cut(match.end())
         if len(self._buf) > self._max:
             space = self._buf.rfind(" ", 0, self._max)
