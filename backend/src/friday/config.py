@@ -95,6 +95,10 @@ class ClaudeCodeSettings(_Strict):
     # permissions altogether is deliberately not offered.
     permission_mode: Literal["", "plan", "acceptEdits", "auto", "dontAsk"] = ""
     timeout_s: float = Field(default=1800.0, ge=10, le=14_400)
+    # How long one Claude Code chat is continued: "run" = until FRIDAY is
+    # closed, "day" = until midnight, even across restarts, "always" = until
+    # you say "new Claude Code chat".
+    keep_session: Literal["run", "day", "always"] = "day"
 
 
 def _default_providers() -> dict[str, ProviderConfig]:

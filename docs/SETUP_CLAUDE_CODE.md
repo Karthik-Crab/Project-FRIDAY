@@ -52,7 +52,14 @@ Add to `%APPDATA%\FRIDAY\config.toml` (forward slashes in the path):
 enabled = true
 project_dir = "C:/Users/<owner>/Projects/<project>"
 permission_mode = "plan"
+keep_session = "day"
 ```
+
+`keep_session` decides how long every task goes into the same Claude Code chat:
+`"day"` (default) until midnight, even if FRIDAY is closed and reopened; `"run"`
+until FRIDAY is closed; `"always"` until the owner says "Friday, new Claude Code
+chat". To give access to several projects, `project_dir` may be the folder that
+contains them all; the owner then names the project in the task.
 
 Permission levels, to be chosen by the owner, not by the agent:
 
@@ -95,6 +102,9 @@ answer. If it fails with "could not start Claude Code", record the exact message
   cutting into her own sentence or the owner's.
 - **F. Follow-up.** "Ask Claude Code what did I just ask you about?" → its answer
   shows it remembers the first task.
+- **F2. Same chat after a restart.** Close `friday voice`, start it again, and
+  repeat F: it should still remember the first task. Then say "Friday, new Claude
+  Code chat" and repeat F once more: now it should not.
 - **G. Cancel.** Give a long task ("ask Claude Code to review every file in
   detail"), confirm, then say "cancel Claude Code": she says it is stopped and no
   result is announced later.
@@ -107,7 +117,7 @@ Append a `# Claude Code by voice` section to `backend\SETUP_REPORT.md`:
 
 1. Claude Code version, and whether `claude` is an `.exe` or `.cmd`.
 2. The permission mode the owner chose.
-3. Pass or fail for checks 1 to 3 and A to H, with the terminal lines.
+3. Pass or fail for checks 1 to 3 and A to H (including F2), with the terminal lines.
 4. For B: every read-back that was wrong, with what the owner actually said.
 5. How long each task took from "Sent" to the spoken result.
 6. How the spoken summaries sounded: clear, too long, or reading out code or

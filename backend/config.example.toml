@@ -86,3 +86,6 @@ enabled = false
 project_dir = ""                 # the folder Claude Code works in, e.g. "C:/Users/you/Projects/my-app"
 permission_mode = ""             # "" = Claude Code's own settings; "plan" = read and propose only;
                                  # "acceptEdits" = may change files in that folder
+keep_session = "day"             # every task continues one Claude Code chat: "run" = until FRIDAY
+                                 # closes, "day" = until midnight, "always" = until you say
+                                 # "Friday, new Claude Code chat"

@@ -39,9 +39,13 @@ def _delegate(config: FridayConfig) -> CodeDelegate | None:
     project = Path(cc.project_dir).expanduser()
     if not cc.project_dir or not project.is_dir():
         raise ConfigError(f"claude_code.project_dir is not a folder: '{cc.project_dir}'")
+    log_dir = default_config_path().parent / "claude-code"
     return CodeDelegate(
         ClaudeCodeCLI(project, cc.command, cc.permission_mode, cc.timeout_s),
-        log_dir=default_config_path().parent / "claude-code",
+        log_dir=log_dir,
+        state_path=log_dir / "session.json",
+        keep_session=cc.keep_session,
+        scope=str(project.resolve()),
     )
 
 

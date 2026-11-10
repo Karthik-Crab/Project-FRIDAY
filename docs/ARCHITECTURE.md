@@ -111,7 +111,8 @@ task on standard input (never on the command line) and with Claude Code's own
 login and permission settings. It runs in the background; when it finishes, the
 session speaks a one or two sentence summary that Claude Code itself was asked to
 write, stores it in history, and the full output is saved next to the config file
-under `claude-code/`. Follow-up tasks continue the same Claude Code session.
+under `claude-code/`. Follow-up tasks continue the same Claude Code session; its id is kept in
+`claude-code/session.json` so the chat lasts the day across restarts (`keep_session`).
 Bypassing Claude Code's permissions is not offered as a setting.
 
 **Fillers.** "Hmm" or "uh" with nothing else is never treated as a turn, whether or

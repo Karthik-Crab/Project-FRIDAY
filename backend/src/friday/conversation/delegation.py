@@ -12,11 +12,12 @@ The work itself runs in the background; the conversation carries on, and a
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from friday.core.errors import FridayError
@@ -79,6 +80,9 @@ class CodeDelegate:
         log_dir: Path | None = None,
         on_done: Callable[[Notice], None] | None = None,
         name: str = "Claude Code",
+        state_path: Path | None = None,
+        keep_session: str = "run",
+        scope: str = "",
     ) -> None:
         self.agent = agent
         self.log_dir = log_dir
@@ -87,6 +91,13 @@ class CodeDelegate:
         self.pending: str | None = None  # read back, waiting for "yes"
         self.session_id: str | None = None  # follow-ups continue the same session
         self._job: asyncio.Task[None] | None = None
+        # Where the session is remembered between runs of FRIDAY, so one Claude
+        # Code chat can last the whole day ("day") or until told otherwise
+        # ("always"). ``scope`` is the project folder: a chat belongs to it.
+        self.state_path = state_path if keep_session in ("day", "always") else None
+        self.keep_session = keep_session
+        self.scope = scope
+        self._load_session()
 
     @property
     def busy(self) -> bool:
@@ -115,6 +126,7 @@ class CodeDelegate:
             return f"Okay, I've stopped {self.name}."
         if _FRESH.match(text):
             self.session_id = None
+            self._save_session()
             return f"Okay, the next task starts a fresh {self.name} session."
         task = parse_task(text)
         if task is not None:
@@ -155,6 +167,9 @@ class CodeDelegate:
             raise
         if result.session_id:
             self.session_id = result.session_id
+        elif not result.ok and "no conversation found" in result.text.lower():
+            self.session_id = None  # the remembered chat is gone: start fresh next time
+        self._save_session()
         path = self._write_log(task, result)
         if result.ok:
             spoken = f"{self.name} is done. {spoken_summary(result.text)}"
@@ -165,6 +180,44 @@ class CodeDelegate:
                 self.on_done(Notice(task=task, spoken=spoken.strip(), ok=result.ok, log_path=path))
             except Exception:  # a broken listener must not lose the result
                 log.exception("code agent listener failed")
+
+    def _load_session(self) -> None:
+        if self.state_path is None:
+            return
+        try:
+            saved = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(saved, dict) or saved.get("scope") != self.scope:
+            return
+        if self.keep_session == "day" and saved.get("day") != date.today().isoformat():
+            return
+        session = saved.get("session_id")
+        if isinstance(session, str) and session:
+            self.session_id = session
+
+    def _save_session(self) -> None:
+        if self.state_path is None:
+            return
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            if self.session_id is None:
+                self.state_path.unlink(missing_ok=True)
+                return
+            # "day" is the day the chat started, so it ends at midnight.
+            day = date.today().isoformat()
+            try:
+                old = json.loads(self.state_path.read_text(encoding="utf-8"))
+                if isinstance(old, dict) and old.get("session_id") == self.session_id:
+                    day = str(old.get("day", day))
+            except (OSError, ValueError):
+                pass
+            self.state_path.write_text(
+                json.dumps({"session_id": self.session_id, "day": day, "scope": self.scope}),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            log.warning("could not remember the code agent session: %s", exc)
 
     def _write_log(self, task: str, result: CodeResult) -> Path | None:
         if self.log_dir is None:

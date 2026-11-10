@@ -274,3 +274,52 @@ async def test_yes_while_the_task_is_still_being_read_back_counts() -> None:
     )
     await asyncio.wait_for(session.run(), 30)
     assert agent.calls == [("add a dark mode toggle to the settings page.", None)]
+
+
+async def test_one_chat_lasts_the_day_across_restarts(tmp_path: Path) -> None:
+    state = tmp_path / "session.json"
+
+    def start(keep: str = "day", scope: str = "proj") -> tuple[CodeDelegate, FakeAgent]:
+        agent = FakeAgent()
+        return CodeDelegate(agent, state_path=state, keep_session=keep, scope=scope), agent
+
+    first, agent = start()
+    first.handle("Ask Claude Code to add a toggle.")
+    first.handle("yes")
+    await until(lambda: not first.busy)
+    assert agent.calls == [("add a toggle.", None)]
+
+    # FRIDAY is closed and started again: the next task continues the same chat.
+    second, agent = start()
+    second.handle("Ask Claude Code to add tests for it.")
+    second.handle("yes")
+    await until(lambda: not second.busy)
+    assert agent.calls == [("add tests for it.", "abcd1234-0000")]
+
+    assert start(scope="another-folder")[0].session_id is None
+    assert start(keep="run")[0].session_id is None
+
+    # Yesterday's chat is not continued, unless the owner asked to keep it always.
+    saved = json.loads(state.read_text())
+    state.write_text(json.dumps(saved | {"day": "2000-01-01"}))
+    assert start()[0].session_id is None
+    assert start(keep="always")[0].session_id == "abcd1234-0000"
+
+    third, _ = start(keep="always")
+    assert "fresh" in (third.handle("Friday, new Claude Code chat.") or "")
+    assert not state.exists() and start(keep="always")[0].session_id is None
+
+
+async def test_a_chat_that_no_longer_exists_is_forgotten(tmp_path: Path) -> None:
+    class Gone(FakeAgent):
+        async def run(self, task: str, resume: str | None = None) -> CodeResult:
+            return CodeResult(text="No conversation found with session ID: x", ok=False)
+
+    state = tmp_path / "session.json"
+    state.write_text(json.dumps({"session_id": "abcd1234-0000", "day": "x", "scope": ""}))
+    delegate = CodeDelegate(Gone(), state_path=state, keep_session="always")
+    assert delegate.session_id == "abcd1234-0000"
+    delegate.handle("Ask Claude Code to carry on.")
+    delegate.handle("yes")
+    await until(lambda: not delegate.busy)
+    assert delegate.session_id is None and not state.exists()
