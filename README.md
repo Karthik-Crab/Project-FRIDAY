@@ -17,6 +17,7 @@ tested phases.
 | [docs/RISKS.md](docs/RISKS.md) | Architecture evaluation, where we deviate from the blueprint, risk register, latency budget |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, dependency rules, voice turn and barge-in flows, how to extend |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phases, milestones, Phase 1 acceptance criteria and status |
+| [docs/SETUP_WINDOWS.md](docs/SETUP_WINDOWS.md) | Step-by-step laptop setup brief, written for a coding agent with shell access |
 | [docs/TESTING.md](docs/TESTING.md) | Test strategy and the manual hardware acceptance script |
 | [docs/adr/](docs/adr/) | Architecture decision records |
 
