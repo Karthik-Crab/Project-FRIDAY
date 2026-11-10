@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from friday.conversation.memory import INTERRUPTED_MARKER, ConversationWindow
 from friday.core.errors import ProviderError
-from friday.core.messages import ChatRequest
+from friday.core.messages import ChatRequest, Role
 from friday.llm.base import ProviderInfo
 from friday.llm.router import ProviderRouter, StreamResult
 from friday.persona.commands import parse_command
@@ -40,6 +40,7 @@ class TurnInfo:
     was_command: bool = False
     failed: bool = False
     stored: bool = False  # an assistant message for this turn is in history
+    user_stored: bool = False  # the user message for this turn is in history
     full_text: str = ""
     extra: dict[str, str] = field(default_factory=dict)
 
@@ -95,6 +96,7 @@ class ConversationEngine:
             return  # commands are control, not conversation: not stored in history
 
         self.window.add_user(user_text)
+        turn.user_stored = True
         request = self.build_request()
         result = StreamResult()
         parts: list[str] = []
@@ -134,6 +136,20 @@ class ConversationEngine:
             return  # interrupted before anything was stored, or a command ack
         heard = heard_text.strip() or "(nothing heard)"
         self.window.replace_last_assistant(heard + INTERRUPTED_MARKER)
+
+    def discard_turn(self) -> None:
+        """Forget the last turn entirely, as if it had never been asked.
+
+        Used when the user turns out to still be mid-sentence: the caller
+        re-submits the whole thought as one turn.
+        """
+        turn = self.last_turn
+        if turn.stored:
+            self.window.drop_last(Role.ASSISTANT)
+            turn.stored = False
+        if turn.user_stored:
+            self.window.drop_last(Role.USER)
+            turn.user_stored = False
 
     def set_mode(self, mode: Mode) -> None:
         self.mode = mode

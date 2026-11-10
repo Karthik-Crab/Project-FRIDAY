@@ -19,7 +19,11 @@ class OllamaProvider:
         model: str,
         base_url: str = "http://127.0.0.1:11434",
         client: httpx.AsyncClient | None = None,
+        keep_alive: str = "30m",
     ) -> None:
+        # How long Ollama keeps the model in memory after a request. Its own
+        # default (5 minutes) means a cold, multi-second start after any pause.
+        self._keep_alive = keep_alive
         self._info = ProviderInfo(name=name, kind="ollama", model=model, local=True)
         self._client = client or httpx.AsyncClient(base_url=base_url, timeout=DEFAULT_TIMEOUT)
 
@@ -31,6 +35,7 @@ class OllamaProvider:
         payload = {
             "model": self._info.model,
             "stream": True,
+            "keep_alive": self._keep_alive,
             "messages": [{"role": "system", "content": request.system}]
             + [{"role": m.role.value, "content": m.content} for m in request.messages],
             "options": {"temperature": request.temperature, "num_predict": request.max_tokens},
@@ -58,6 +63,14 @@ class OllamaProvider:
             return response.status_code == 200
         except httpx.HTTPError:
             return False
+
+    async def warm_up(self) -> None:
+        """Load the model into memory now instead of on the first question."""
+        payload = {"model": self._info.model, "messages": [], "keep_alive": self._keep_alive}
+        try:
+            await self._client.post("/api/chat", json=payload)
+        except httpx.HTTPError:
+            pass  # best effort; a real request will report the problem
 
     async def aclose(self) -> None:
         await self._client.aclose()

@@ -84,7 +84,9 @@ pytest
 
 Expected: 79 passed.
 
-**Check 2b:** the scripted voice session runs without a microphone or models.
+**Check 2b:** the scripted voice session runs without a microphone or speech
+models. It does use the configured language model, so if no cloud key is stored
+it needs Ollama and the model from stage 3: run this check after stage 3.
 
 ```powershell
 friday voice --simulate
@@ -166,7 +168,7 @@ config points at them (or they are the system defaults, marked `>` and `<`).
 friday voice
 ```
 
-The first run downloads the Whisper `small.en` model (roughly 500 MB) and will
+The first run downloads the Whisper `base.en` model (roughly 150 MB) and will
 stay on `Loading speech models...` for a while. That is normal.
 
 Then have the owner work through the manual acceptance script in

@@ -17,9 +17,18 @@ _STOP = re.compile(
     r"(?:\s+(?:please|friday|now|a (?:sec|second|moment)))*$"
 )
 _BACKCHANNEL = re.compile(
-    r"^(?:yeah|yep|yes|yup|mm+|m+ ?h+m+|uh huh|okay|ok|right|sure|got it|i see|cool|"
+    r"^(?:yeah|yep|yes|yup|mm+|h+m+|m+ ?h+m+|uh huh|okay|ok|right|sure|got it|i see|cool|"
     r"nice|ah|oh|aha|true|exactly)(?:\s+(?:yeah|okay|ok|right|sure))*$"
 )
+
+
+# Sounds that carry no content at all. Unlike "yes" or "okay" (which can answer
+# a question), these are ignored even when FRIDAY is not speaking.
+_FILLER = re.compile(r"^(?:h+m+|m+|m+ ?h+m+|u+h+|u+m+|uh huh|ah+|oh+|er+|huh)$")
+
+
+def is_filler(text: str) -> bool:
+    return bool(_FILLER.match(_normalise(text)))
 
 
 class ControlIntent(Enum):

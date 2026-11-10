@@ -1,10 +1,12 @@
+import asyncio
+
 import numpy as np
 
 from friday.voice.adapters.faster_whisper_stt import FasterWhisperSTT, pcm16_to_float32
 from friday.voice.adapters.kokoro_tts import KokoroTTS, float_to_pcm16
 from friday.voice.base import AudioFrame
 from friday.voice.chunker import SentenceChunker
-from friday.voice.control import ControlIntent, classify
+from friday.voice.control import ControlIntent, classify, is_filler
 from friday.voice.fakes import FRAME_MS, SAMPLE_RATE, noise, tone
 from friday.voice.sanitize import SpeechSanitizer
 from friday.voice.segmenter import (
@@ -130,6 +132,14 @@ def test_control_intents() -> None:
     assert classify("yeah but what about tests?") is None
 
 
+def test_fillers_are_distinguished_from_answers() -> None:
+    for text in ("Hmm.", "mm", "Mm-hmm", "uh", "Um...", "Oh."):
+        assert is_filler(text), text
+    for text in ("Yes.", "Okay", "Hmm, what about lunch?", "No"):
+        assert not is_filler(text), text
+    assert classify("Hmm.") is ControlIntent.BACKCHANNEL
+
+
 # ---- adapter format conversion (models stubbed) -----------------------------
 
 
@@ -144,6 +154,7 @@ class _StubWhisper:
 
     def transcribe(self, audio, **kwargs):  # type: ignore[no-untyped-def]
         self.audio = audio
+        self.kwargs = kwargs
         return iter([_Seg(" Hello"), _Seg(" world. ")]), type("I", (), {"language": "en"})()
 
 
@@ -185,3 +196,30 @@ async def test_whisper_adapter_drops_low_confidence_noise_segments() -> None:
 
     result = await FasterWhisperSTT(model=Noisy()).transcribe(tone(100), 16_000)
     assert result.text == "Open the report."
+
+
+async def test_whisper_adapter_passes_vocabulary_as_prompt_and_warms_up() -> None:
+    stub = _StubWhisper()
+    stt = FasterWhisperSTT(model=stub, vocabulary=("Friday", "Karthik"))
+    await stt.warm_up()
+    assert stub.kwargs["initial_prompt"] == "Friday, Karthik."
+    assert stub.audio is not None and len(stub.audio) == 8000
+    plain = _StubWhisper()
+    await FasterWhisperSTT(model=plain).transcribe(tone(100), 16_000)
+    assert plain.kwargs["initial_prompt"] is None
+
+
+async def test_kokoro_adapter_reuses_one_worker_thread() -> None:
+    import threading
+
+    names: set[str] = set()
+
+    class Engine:
+        def create(self, text, voice, speed, lang):  # type: ignore[no-untyped-def]
+            names.add(threading.current_thread().name)
+            return np.zeros(10, dtype=np.float32), 24_000
+
+    tts = KokoroTTS("m", "v", engine=Engine())
+    await tts.warm_up()
+    await asyncio.gather(tts.synthesize("one"), tts.synthesize("two"))
+    assert len(names) == 1 and next(iter(names)).startswith("friday-tts")

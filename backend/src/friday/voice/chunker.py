@@ -16,7 +16,7 @@ _CLAUSE_END = re.compile("[,;:\u2013\u2014](?=\\s)")  # incl. en/em dash
 
 class SentenceChunker:
     def __init__(
-        self, first_min_chars: int = 20, min_chars: int = 40, max_chars: int = 250
+        self, first_min_chars: int = 10, min_chars: int = 40, max_chars: int = 250
     ) -> None:
         self._first_min = first_min_chars
         self._min = min_chars

@@ -39,7 +39,13 @@ class ProviderConfig(_Strict):
 
 
 class VoiceSettings(_Strict):
-    stt_model: str = "small.en"
+    # "base.en" answers about three times sooner than "small.en" on a laptop
+    # CPU, at some cost in accuracy. See docs/RISKS.md (latency).
+    stt_model: str = "base.en"
+    stt_cpu_threads: int = Field(default=0, ge=0, le=64)  # 0 = automatic
+    # Names and jargon the recogniser should expect, on top of "Friday" and
+    # the user's name.
+    stt_vocabulary: list[str] = Field(default_factory=list)
     # CPU + int8 is the right default without an NVIDIA GPU (CTranslate2 has
     # no AMD GPU backend). With one: stt_device = "cuda", compute "float16".
     stt_device: str = "cpu"
@@ -55,9 +61,9 @@ class VoiceSettings(_Strict):
     input_device: int | str | None = None
     output_device: int | str | None = None
     end_silence_ms: float = Field(default=700.0, ge=200, le=3000)
-    barge_in_min_ms: float = Field(default=400.0, ge=100, le=3000)
+    barge_in_min_ms: float = Field(default=300.0, ge=100, le=3000)
     speech_threshold: float = Field(default=0.5, ge=0.05, le=0.99)
-    speech_threshold_while_speaking: float = Field(default=0.85, ge=0.05, le=0.99)
+    speech_threshold_while_speaking: float = Field(default=0.6, ge=0.05, le=0.99)
 
 
 class RealtimeSettings(_Strict):

@@ -6,6 +6,7 @@ friday voice --simulate     scripted voice session with fake audio/models
 friday voice --realtime     speech-to-speech via the OpenAI Realtime API
                             (needs friday[realtime], internet and an API key)
 friday providers            check which providers are reachable
+friday mic                  live microphone level and speech-detection meter
 """
 
 from __future__ import annotations
@@ -82,10 +83,14 @@ def _print_voice_event(event: object) -> None:
         print(f"\nyou> {event.text}")
     elif isinstance(event, vs.AssistantSaid):
         print(f"friday> {event.text}")
+    elif isinstance(event, vs.Interrupted) and event.reason == "merge":
+        print("  [you kept talking: answering it all as one turn]")
     elif isinstance(event, vs.Interrupted):
         print(f"  [interrupted ({event.reason}); heard: {event.heard!r}]")
     elif isinstance(event, vs.TurnFinished):
         m = event.metrics
+        if event.interrupted and m.first_audio_ms is None:
+            return  # nothing was spoken, so there is no latency to report
         print(
             f"  [stt {m.stt_ms:.0f} ms | first token {m.first_token_ms or 0:.0f} ms | "
             f"first audio {m.first_audio_ms or 0:.0f} ms | endpoint {m.endpoint_ms:.0f} ms | "
@@ -95,6 +100,45 @@ def _print_voice_event(event: object) -> None:
         print(f"  [error: {event.message}]")
     elif isinstance(event, vs.StateChanged):
         log.debug("state -> %s", event.state)
+
+
+async def _warm_up_local(router: ProviderRouter) -> None:
+    for provider in router.providers.values():
+        warm_up = getattr(provider, "warm_up", None)
+        if provider.info.local and warm_up is not None:
+            await warm_up()
+
+
+async def _mic(config: FridayConfig, seconds: float) -> None:
+    """Live level meter: shows what the voice detector makes of the microphone."""
+    from friday.voice.adapters.sounddevice_io import MicrophoneSource
+    from friday.voice.vad import EnergyVAD, frame_dbfs
+
+    v = config.voice
+    vad = EnergyVAD()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    peak = 0.0
+    print(
+        f"Speak normally for {seconds:.0f} s. Speech should pass {v.speech_threshold:.2f} "
+        f"(and {v.speech_threshold_while_speaking:.2f} to interrupt); silence should stay near 0."
+    )
+    count = 0
+    async for frame in MicrophoneSource(v.input_device).frames():
+        prob = vad.speech_probability(frame)
+        peak = max(peak, prob)
+        count += 1
+        if count % 5 == 0:  # about ten lines a second
+            bar = "#" * round(prob * 30)
+            print(
+                f"\rlevel {frame_dbfs(frame.pcm):6.1f} dB  floor {vad.noise_floor_db:6.1f} dB  "
+                f"speech {prob:4.2f} {bar:<30}",
+                end="",
+                flush=True,
+            )
+        if loop.time() >= deadline:
+            break
+    print(f"\nHighest speech score: {peak:.2f}")
 
 
 async def _voice_realtime(config: FridayConfig) -> None:
@@ -150,7 +194,8 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
                 fakes.Silence(300),
                 fakes.Speak(900),
                 fakes.Silence(800),
-                fakes.WaitFor(lambda: sink.is_playing),
+                # A local model that is not loaded yet can take a while.
+                fakes.WaitFor(lambda: sink.is_playing, timeout_s=120),
                 fakes.Speak(600),
                 fakes.Silence(800),
                 fakes.WaitFor(lambda: not sink.is_playing, timeout_s=60),
@@ -181,8 +226,12 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
             language=v.language,
             max_no_speech_prob=v.stt_max_no_speech_prob,
             min_avg_logprob=v.stt_min_avg_logprob,
+            cpu_threads=v.stt_cpu_threads,
+            vocabulary=("Friday", config.user_name, *v.stt_vocabulary),
         )
         tts = KokoroTTS(v.tts_model_path, v.tts_voices_path, voice=v.tts_voice, speed=v.tts_speed)
+        # Pay every start-up cost now, not on the first thing the user says.
+        await asyncio.gather(stt.warm_up(), tts.warm_up(), _warm_up_local(router))
         session = VoiceSession(
             engine,
             MicrophoneSource(v.input_device),
@@ -208,6 +257,8 @@ def main(argv: list[str] | None = None) -> int:
     voice.add_argument("--simulate", action="store_true")
     voice.add_argument("--realtime", action="store_true", help="speech-to-speech (cloud)")
     sub.add_parser("providers")
+    mic = sub.add_parser("mic", help="show microphone level and speech detection")
+    mic.add_argument("--seconds", type=float, default=15.0)
     args = parser.parse_args(argv)
 
     try:
@@ -225,6 +276,8 @@ def main(argv: list[str] | None = None) -> int:
             asyncio.run(_voice_realtime(config))
         elif args.command == "voice":
             asyncio.run(_voice(config, router, args.simulate))
+        elif args.command == "mic":
+            asyncio.run(_mic(config, args.seconds))
         else:
             return asyncio.run(_providers(router))
     except (FridayError, ValueError) as exc:

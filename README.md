@@ -68,6 +68,12 @@ See the voice pipeline (including an interruption) without a microphone or model
 friday voice --simulate
 ```
 
+Check what the voice detector makes of your microphone:
+
+```bash
+friday mic
+```
+
 Live voice (headset recommended):
 
 ```bash

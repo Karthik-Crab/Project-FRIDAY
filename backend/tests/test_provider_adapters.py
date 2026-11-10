@@ -46,7 +46,24 @@ async def test_ollama_request_and_stream() -> None:
     assert seen["path"] == "/api/chat"
     assert seen["body"]["messages"][0] == {"role": "system", "content": "be nice"}
     assert seen["body"]["stream"] is True
+    assert seen["body"]["keep_alive"] == "30m"  # stay loaded between turns
     assert p.info.local
+
+
+async def test_ollama_warm_up_loads_the_model_without_a_prompt() -> None:
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"done": True})
+
+    await OllamaProvider("local", "llama", client=client(handler, "http://x")).warm_up()
+    assert seen["body"] == {"model": "llama", "messages": [], "keep_alive": "30m"}
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down")
+
+    await OllamaProvider("local", "llama", client=client(refuse, "http://x")).warm_up()
 
 
 async def test_openai_request_and_stream() -> None:

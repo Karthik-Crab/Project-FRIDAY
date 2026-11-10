@@ -51,6 +51,11 @@ class ConversationWindow:
             raise ValueError("no assistant message to replace")
         self._messages[-1] = Message(Role.ASSISTANT, text)
 
+    def drop_last(self, role: Role) -> None:
+        """Remove the newest message if it has ``role`` (used to undo a turn)."""
+        if self._messages and self._messages[-1].role is role:
+            self._messages.pop()
+
     def clear(self) -> None:
         self._messages.clear()
 

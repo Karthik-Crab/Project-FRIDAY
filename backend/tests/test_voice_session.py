@@ -36,8 +36,8 @@ def long_then_short(request):  # type: ignore[no-untyped-def]
     return LONG_REPLY if len(request.messages) == 1 else "Yes, three hearts."
 
 
-def build(steps, transcripts, reply=LONG_REPLY, sink_speed=20.0):  # type: ignore[no-untyped-def]
-    provider = FakeProvider("fake", reply=reply, delay=0.001)
+def build(steps, transcripts, reply=LONG_REPLY, sink_speed=20.0, llm_delay=0.001):  # type: ignore[no-untyped-def]
+    provider = FakeProvider("fake", reply=reply, delay=llm_delay)
     engine = ConversationEngine(
         ProviderRouter({"fake": provider}, {"default": ["fake"]}), channel=Channel.VOICE
     )
@@ -337,3 +337,86 @@ async def test_stop_works_even_if_the_sink_swallows_cancellation() -> None:
     session.sink = sink = swallowing  # the lambdas above read `sink`
     await asyncio.wait_for(session.run(), 15)
     assert [i.reason for i in of(events, vs.Interrupted)] == ["stop"]
+
+
+# ---- found on the first hardware run (docs/reports) -------------------------
+
+
+def done(events):  # type: ignore[no-untyped-def]
+    return [e for e in of(events, vs.TurnFinished) if not e.interrupted]
+
+
+async def test_speaking_again_before_any_audio_merges_into_one_turn() -> None:
+    """A pause mid-sentence must not produce a reply to half a thought."""
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),  # endpoint: a turn starts for the first half
+            Speak(600),  # ...but the user carries on before anything is said
+            Silence(900),
+            WaitFor(lambda: len(done(events)) >= 1, timeout_s=10),
+        ],
+        ["It was really good, this is", "my first trial run with you."],
+        reply="Glad to hear that.",
+        llm_delay=0.2,  # slow first sentence, like a local model on a CPU
+    )
+    await asyncio.wait_for(session.run(), 20)
+
+    assert [e.reason for e in of(events, vs.Interrupted)] == ["merge"]
+    assert len(done(events)) == 1
+    final = provider.requests[-1].messages
+    assert [m.role for m in final] == [Role.USER]
+    assert final[0].content == "It was really good, this is my first trial run with you."
+    history = engine.window.messages
+    assert [m.role for m in history] == [Role.USER, Role.ASSISTANT]
+    assert history[1].content == "Glad to hear that."
+    assert tts.spoken == ["Glad to hear that."]
+
+
+async def test_noise_before_any_audio_still_gets_the_question_answered() -> None:
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),
+            Speak(600),  # a cough while FRIDAY is still thinking
+            Silence(900),
+            WaitFor(lambda: len(done(events)) >= 1, timeout_s=10),
+        ],
+        ["What time is it?", ""],
+        reply="About half past nine.",
+        llm_delay=0.2,
+    )
+    await asyncio.wait_for(session.run(), 20)
+
+    assert len(done(events)) == 1
+    assert [m.content for m in provider.requests[-1].messages] == ["What time is it?"]
+    assert [m.role for m in engine.window.messages] == [Role.USER, Role.ASSISTANT]
+    assert of(events, vs.VoiceErrorEvent) == []
+
+
+async def test_filler_into_silence_is_not_answered() -> None:
+    session, engine, provider, sink, tts, events = build(
+        [Silence(300), Speak(500), Silence(1200)],
+        ["Hmm."],
+    )
+    await asyncio.wait_for(session.run(), 10)
+    assert provider.requests == []
+    assert of(events, vs.TurnFinished) == []
+    assert session.state is vs.VoiceState.LISTENING
+
+
+async def test_yes_into_silence_is_an_answer_not_a_filler() -> None:
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(500),
+            Silence(900),
+            WaitFor(lambda: len(done(events)) >= 1, timeout_s=10),
+        ],
+        ["Yes."],
+        reply="Great, let's do it.",
+    )
+    await asyncio.wait_for(session.run(), 10)
+    assert len(provider.requests) == 1

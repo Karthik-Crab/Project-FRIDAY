@@ -36,8 +36,15 @@ Setup: `pip install -e ".[voice,secrets]"`, download the Kokoro model files into
 `backend/models/`, install Ollama and pull a model, and copy `config.example.toml`.
 Use a **headset** for steps 1–8. Step 9 tests the speakers.
 
+Also try: start a sentence, pause for a second mid-thought, then finish it. She
+should answer the whole sentence once (the log shows `you kept talking`), not
+answer the first half. And say "hmm" into silence: she should not reply.
+
 Record for each step: pass/fail, the latency line FRIDAY prints, and notes.
 
+0. `friday mic`, speak normally: the speech score should pass 0.6 while you talk and
+   stay near 0 when you are quiet. If it does not, note the numbers; interruption
+   cannot work until it does (tune `speech_threshold_while_speaking`).
 1. `friday providers`: every configured provider shows OK.
 2. `friday voice`, say "Hi Friday, how's it going?". You get a short, natural spoken
    reply with no markdown read aloud. (A1)
@@ -57,8 +64,10 @@ Record for each step: pass/fail, the latency line FRIDAY prints, and notes.
 10. Turn Wi-Fi off, ask a question: she still answers through Ollama. (A8)
 11. Collect 20 turns of latency lines. The median of `endpoint + first audio` should
     be under 1.5 s. (A9)
-12. Cough or tap the desk for a second during a long answer: she pauses, then carries
-    on from the sentence she was in. Say "yeah, okay": same. (A11)
+12. Cough or tap the desk once during a long answer: she keeps talking (a short
+    sound is below the interruption threshold, which is intended). Then hum or say
+    "yeah, okay" for about a second: she pauses, then carries on from the sentence
+    she was in. (A11)
 13. Realtime mode: `pip install -e ".[realtime]"`, store an OpenAI API key under
     `openai`, run `friday voice --realtime`. Hold a short conversation, interrupt
     once, say "Friday, work mode". Note any `[error: ...]` line exactly as printed.

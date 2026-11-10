@@ -93,3 +93,22 @@ async def test_record_interruption_ignores_command_turns(engine: ConversationEng
     await collect(engine.respond("Friday, work mode"))
     engine.record_interruption("Work")
     assert engine.window.messages == before
+
+
+async def test_discard_turn_forgets_the_whole_exchange(engine: ConversationEngine) -> None:
+    await collect(engine.respond("first question"))
+    await collect(engine.respond("half a thought"))
+    engine.discard_turn()
+    assert engine.window.messages[0].content == "first question"
+    assert [m.role for m in engine.window.messages] == [Role.USER, Role.ASSISTANT]
+    engine.discard_turn()  # idempotent
+    assert len(engine.window.messages) == 2
+
+
+async def test_discard_turn_leaves_history_alone_after_a_command(
+    engine: ConversationEngine,
+) -> None:
+    await collect(engine.respond("hello"))
+    await collect(engine.respond("Friday, work mode"))
+    engine.discard_turn()
+    assert len(engine.window.messages) == 2

@@ -1,7 +1,6 @@
 """Local neural TTS with kokoro-onnx (Apache-2.0 model weights).
 
-Status: written against the kokoro-onnx 0.4 API; NOT yet verified on the
-target Windows hardware. See docs/ROADMAP.md, milestone M1.3.
+Status: runs on the target Windows laptop (first hardware run, 2026-11-10).
 
 Model files (``kokoro-v1.0.onnx``, ``voices-v1.0.bin``) are downloaded
 separately; paths come from config.
@@ -10,6 +9,8 @@ separately; paths come from config.
 from __future__ import annotations
 
 import asyncio
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
@@ -39,7 +40,14 @@ class KokoroTTS:
             except ImportError as exc:  # pragma: no cover - depends on extras
                 raise VoiceError("kokoro-onnx is not installed: pip install friday[voice]") from exc
             engine = Kokoro(model_path, voices_path)
+            # kokoro-onnx logs a "words count mismatch" warning for most
+            # sentences; it is harmless and drowns out the conversation.
+            logging.getLogger("phonemizer").setLevel(logging.ERROR)
         self._engine = engine
+        # One long-lived thread: the phonemizer initialises per thread, and a
+        # synthesis orphaned by an interruption then cannot pile up alongside
+        # the next one and fight speech recognition for the CPU.
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="friday-tts")
         self.voice = voice
         self.speed = speed
         self._lang = lang
@@ -51,10 +59,17 @@ class KokoroTTS:
 
     async def synthesize(self, text: str) -> AudioChunk:
         try:
-            samples, rate = await asyncio.to_thread(
-                self._engine.create, text, voice=self.voice, speed=self.speed, lang=self._lang
+            samples, rate = await asyncio.get_running_loop().run_in_executor(
+                self._pool,
+                lambda: self._engine.create(
+                    text, voice=self.voice, speed=self.speed, lang=self._lang
+                ),
             )
         except Exception as exc:
             raise VoiceError(f"speech synthesis failed: {type(exc).__name__}: {exc}") from exc
         self._rate = int(rate)
         return AudioChunk(float_to_pcm16(samples), int(rate))
+
+    async def warm_up(self) -> None:
+        """Synthesise once so the first reply does not pay the start-up cost."""
+        await self.synthesize("Ready.")

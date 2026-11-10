@@ -68,7 +68,7 @@ These are the rules that keep the system replaceable. Breaking one needs an ADR.
 
 While a turn is active the frame loop keeps running.
 
-1. **Hold.** When the user has spoken for `barge_in_min_ms` (400 ms), playback is
+1. **Hold.** When the user has spoken for `barge_in_min_ms` (300 ms), playback is
    silenced on the next audio callback and the turn is paused. Nothing is thrown away
    yet.
 2. **Decide**, when the utterance has been transcribed:
@@ -76,6 +76,20 @@ While a turn is active the frame loop keeps running.
    - "stop" → the turn is cancelled, no reply;
    - an empty transcript (noise) or a backchannel ("mm-hmm", "yeah okay") → the turn
      resumes from the sentence that was cut.
+
+While the turn is on hold, synthesis of further sentences also waits, so it does not
+compete with speech recognition for the CPU.
+
+**Still mid-thought.** If the user speaks again before the reply has produced any
+audio, they were not interrupting: their pause was just longer than the endpoint.
+The turn is abandoned immediately (freeing the CPU), the engine forgets it
+(`discard_turn`), and its text is joined with the next utterance into one turn. If
+the next utterance turns out to be noise, the original question is asked again
+unchanged.
+
+**Fillers.** "Hmm" or "uh" with nothing else is never treated as a turn, whether or
+not FRIDAY is speaking. "Yes" and "okay" are backchannels only while she is
+speaking; into silence they are answers.
 
 On cancel, the engine's reply generator is closed explicitly, which closes the
 provider's HTTP stream, so a cloud model stops generating (and billing). The words
