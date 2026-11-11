@@ -270,3 +270,25 @@ def test_sounds_below_the_absolute_level_are_never_speech() -> None:
     assert score(EnergyVAD(), quiet) == 1.0  # the problem seen on the laptop
     assert score(EnergyVAD(min_speech_db=level + 6), quiet) == 0.0
     assert score(EnergyVAD(min_speech_db=level + 6), loud) == 1.0
+
+
+# ---- listen-only command ----------------------------------------------------
+
+
+async def test_listen_prints_what_was_heard_and_nothing_else() -> None:
+    from friday.cli import listen_loop
+    from friday.voice.fakes import ScriptedAudioSource, ScriptedSTT, Silence, Speak
+    from friday.voice.vad import EnergyVAD
+
+    lines: list[str] = []
+    await listen_loop(
+        ScriptedAudioSource([Silence(300), Speak(800), Silence(900), Speak(600), Silence(900)]),
+        EnergyVAD(),
+        ScriptedSTT(["Explain how a rainbow works.", ""]),
+        0.5,
+        700,
+        show=lines.append,
+    )
+    assert len(lines) == 2
+    assert lines[0].startswith("heard> Explain how a rainbow works.")
+    assert lines[1].startswith("heard> (nothing)")

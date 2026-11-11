@@ -43,6 +43,9 @@ class VoiceSettings(_Strict):
     # CPU, at some cost in accuracy. See docs/RISKS.md (latency).
     stt_model: str = "base.en"
     stt_cpu_threads: int = Field(default=0, ge=0, le=64)  # 0 = automatic
+    # 1 = fastest. 5 considers more alternatives per word: fewer misheard
+    # words, somewhat slower.
+    stt_beam_size: int = Field(default=1, ge=1, le=10)
     # Names and jargon the recogniser should expect, on top of "Friday" and
     # the user's name.
     stt_vocabulary: list[str] = Field(default_factory=list)

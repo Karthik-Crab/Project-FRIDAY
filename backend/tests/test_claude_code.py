@@ -323,3 +323,16 @@ async def test_a_chat_that_no_longer_exists_is_forgotten(tmp_path: Path) -> None
     delegate.handle("yes")
     await until(lambda: not delegate.busy)
     assert delegate.session_id is None and not state.exists()
+
+
+async def test_saying_the_command_again_replaces_the_waiting_task() -> None:
+    agent = FakeAgent()
+    delegate, engine, provider, notices = setup(agent)
+
+    await ask(engine, "Ask Claude Code to list on the files. I am a project.")
+    # misheard "ask" as "as": still the command again, not more words for the task
+    reply = await ask(engine, "Now, as Claude Code list all the files in my project.")
+    assert reply == "For Claude Code: list all the files in my project. Shall I send it?"
+    # without a waiting task the loose wording is ordinary conversation
+    delegate.pending = None
+    assert await ask(engine, "As Claude Code said, it is fine.") == "Sure."

@@ -50,6 +50,8 @@ offline = ["local"]
 [voice]
 stt_model = "base.en"            # fast on a laptop CPU; "small.en" is more accurate but ~3x slower
 # stt_cpu_threads = 8            # default: one per physical core, up to 8
+# stt_beam_size = 5              # fewer misheard words, somewhat slower (default 1)
+# Compare models without editing this file:  friday listen --model small.en
 # stt_vocabulary = ["Risk Crawler"]   # names and jargon it should recognise
 stt_device = "cpu"               # no NVIDIA GPU: CPU with int8 is the fast path
 stt_compute_type = "int8"

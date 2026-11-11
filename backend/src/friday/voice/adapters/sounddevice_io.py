@@ -24,6 +24,17 @@ def _sd() -> Any:
     return sounddevice
 
 
+def describe_device(device: int | str | None, kind: str) -> str:
+    """Name of the device that will be used, for the start-up line. A Bluetooth
+    headset used as the microphone shows up here as "Hands-Free": telephone
+    quality, which speech recognition copes with badly."""
+    try:
+        info = _sd().query_devices(device, kind)
+        return f"{info['name']} ({info['default_samplerate']:.0f} Hz)"
+    except Exception as exc:  # a missing device is reported when it is opened
+        return f"unknown ({type(exc).__name__})"
+
+
 class MicrophoneSource:
     def __init__(
         self, device: int | str | None = None, sample_rate: int = 16_000, frame_ms: int = 20

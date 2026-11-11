@@ -45,6 +45,12 @@ _FRESH = re.compile(
     rf"{_LEAD}(?:start{_SEP})?(?:a{_SEP})?(?:new|fresh){_SEP}{_NAME}{_SEP}(?:session|chat)\W*$",
     re.IGNORECASE,
 )
+# While a task is waiting for "yes", saying the command again replaces it. The
+# recogniser often hears "ask" as "as" there, so that is accepted too.
+_AGAIN = re.compile(
+    rf"{_LEAD}(?:(?:no|now|so){_SEP})?(?:ask|as|asked|us){_SEP}{_NAME}{_SEP}(?:to{_SEP})?(?P<task>\S.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
 _YES = re.compile(
     r"^(?:yes|yeah|yep|yup|sure|correct|right|okay|ok|confirm|confirmed|send it|go ahead|"
     r"do it|go|that s right|that s it|yes please|yes send it|please do)$"
@@ -153,6 +159,10 @@ class CodeDelegate:
         if _NO.match(plain):
             self.pending = None
             return "Okay, I won't send it."
+        again = _AGAIN.match(text)
+        if again:  # said the whole command again: start over, do not pile up
+            self.pending = again.group("task").strip()
+            return self._read_back()
         if len(plain.split()) < 3:  # "cool", "I see": not part of a task
             return "Say yes to send it, or no to drop it."
         # Neither yes nor no: they were still dictating.

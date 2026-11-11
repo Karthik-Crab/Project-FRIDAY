@@ -7,6 +7,7 @@ friday voice --realtime     speech-to-speech via the OpenAI Realtime API
                             (needs friday[realtime], internet and an API key)
 friday providers            check which providers are reachable
 friday mic                  live microphone level and speech-detection meter
+friday listen               speech recognition only: prints what was heard
 """
 
 from __future__ import annotations
@@ -15,7 +16,9 @@ import argparse
 import asyncio
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from friday.config import FridayConfig, default_config_path, load_config
 from friday.conversation.delegation import CodeDelegate
@@ -165,10 +168,11 @@ async def _warm_up_local(router: ProviderRouter) -> None:
 
 async def _mic(config: FridayConfig, seconds: float) -> None:
     """Live level meter: shows what the voice detector makes of the microphone."""
-    from friday.voice.adapters.sounddevice_io import MicrophoneSource
+    from friday.voice.adapters.sounddevice_io import MicrophoneSource, describe_device
     from friday.voice.vad import EnergyVAD, frame_dbfs
 
     v = config.voice
+    print(f"Microphone: {describe_device(v.input_device, 'input')}")
     vad = EnergyVAD(min_speech_db=v.min_speech_db)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + seconds
@@ -203,6 +207,74 @@ async def _mic(config: FridayConfig, seconds: float) -> None:
             f"middle {levels[len(levels) // 2]:.1f} dB. Sounds below min_speech_db "
             f"({v.min_speech_db:.0f} dB) are ignored."
         )
+
+
+async def _listen(config: FridayConfig, model: str | None, beam: int | None) -> None:
+    """Speech recognition only: print what was heard, nothing else runs."""
+    from friday.voice.adapters.sounddevice_io import MicrophoneSource, describe_device
+    from friday.voice.vad import EnergyVAD
+
+    v = config.voice
+    print(f"Microphone: {describe_device(v.input_device, 'input')}")
+    print(f"Loading speech model {model or v.stt_model} (beam {beam or v.stt_beam_size})...")
+    stt = _whisper(config, (), model, beam)
+    await stt.warm_up()
+    print("Say something, pause, and read what was heard. Ctrl+C to quit.")
+    await listen_loop(
+        MicrophoneSource(v.input_device),
+        EnergyVAD(min_speech_db=v.min_speech_db),
+        stt,
+        v.speech_threshold,
+        v.end_silence_ms,
+    )
+
+
+async def listen_loop(
+    source: Any,
+    vad: Any,
+    stt: Any,
+    threshold: float,
+    end_silence_ms: float,
+    show: Callable[[str], None] = print,
+) -> None:
+    from friday.voice.segmenter import SegmenterConfig, UtteranceEnded, UtteranceSegmenter
+
+    segmenter = UtteranceSegmenter(SegmenterConfig(end_silence_ms=end_silence_ms))
+    loop = asyncio.get_running_loop()
+
+    async def heard(event: UtteranceEnded) -> None:
+        begun = loop.time()
+        text = (await stt.transcribe(event.pcm, event.sample_rate)).text
+        took = (loop.time() - begun) * 1000
+        length = event.speech_ms / 1000
+        show(f"heard> {text or '(nothing)'}   [{length:.1f} s of speech, {took:.0f} ms]")
+
+    async for frame in source.frames():
+        for event in segmenter.process(frame, vad.speech_probability(frame) >= threshold):
+            if isinstance(event, UtteranceEnded):
+                await heard(event)
+    for event in segmenter.flush():
+        if isinstance(event, UtteranceEnded):
+            await heard(event)
+
+
+def _whisper(
+    config: FridayConfig, extra: tuple[str, ...], model: str | None = None, beam: int | None = None
+) -> Any:
+    from friday.voice.adapters.faster_whisper_stt import FasterWhisperSTT
+
+    v = config.voice
+    return FasterWhisperSTT(
+        model or v.stt_model,
+        device=v.stt_device,
+        compute_type=v.stt_compute_type,
+        language=v.language,
+        beam_size=beam or v.stt_beam_size,
+        max_no_speech_prob=v.stt_max_no_speech_prob,
+        min_avg_logprob=v.stt_min_avg_logprob,
+        cpu_threads=v.stt_cpu_threads,
+        vocabulary=("Friday", config.user_name, *extra, *v.stt_vocabulary),
+    )
 
 
 async def _voice_realtime(config: FridayConfig) -> None:
@@ -282,29 +354,21 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
             engine, source, EnergyVAD(), stt, tts, sink, vcfg, on_event=_print_voice_event
         )
     else:
-        from friday.voice.adapters.faster_whisper_stt import FasterWhisperSTT
         from friday.voice.adapters.kokoro_tts import KokoroTTS
-        from friday.voice.adapters.sounddevice_io import MicrophoneSource, SpeakerSink
-
-        print("Loading speech models...")
-        stt = FasterWhisperSTT(
-            v.stt_model,
-            device=v.stt_device,
-            compute_type=v.stt_compute_type,
-            language=v.language,
-            max_no_speech_prob=v.stt_max_no_speech_prob,
-            min_avg_logprob=v.stt_min_avg_logprob,
-            cpu_threads=v.stt_cpu_threads,
-            vocabulary=(
-                "Friday",
-                config.user_name,
-                *(["Claude Code"] if engine.delegate else []),
-                *v.stt_vocabulary,
-            ),
+        from friday.voice.adapters.sounddevice_io import (
+            MicrophoneSource,
+            SpeakerSink,
+            describe_device,
         )
+
+        print(f"Microphone: {describe_device(v.input_device, 'input')}")
+        print(f"Speaker:    {describe_device(v.output_device, 'output')}")
+        print("Loading speech models...")
+        whisper = _whisper(config, ("Claude Code",) if engine.delegate else ())
+        stt = whisper
         tts = KokoroTTS(v.tts_model_path, v.tts_voices_path, voice=v.tts_voice, speed=v.tts_speed)
         # Pay every start-up cost now, not on the first thing the user says.
-        await asyncio.gather(stt.warm_up(), tts.warm_up(), _warm_up_local(router))
+        await asyncio.gather(whisper.warm_up(), tts.warm_up(), _warm_up_local(router))
         session = VoiceSession(
             engine,
             MicrophoneSource(v.input_device),
@@ -343,6 +407,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("providers")
     mic = sub.add_parser("mic", help="show microphone level and speech detection")
     mic.add_argument("--seconds", type=float, default=15.0)
+    listen = sub.add_parser("listen", help="speech recognition only: print what was heard")
+    listen.add_argument("--model", default=None, help="try another speech model, e.g. small.en")
+    listen.add_argument("--beam", type=int, default=None)
     args = parser.parse_args(argv)
 
     try:
@@ -362,6 +429,8 @@ def main(argv: list[str] | None = None) -> int:
             asyncio.run(_voice(config, router, args.simulate))
         elif args.command == "mic":
             asyncio.run(_mic(config, args.seconds))
+        elif args.command == "listen":
+            asyncio.run(_listen(config, args.model, args.beam))
         else:
             return asyncio.run(_providers(router))
     except (FridayError, ValueError) as exc:

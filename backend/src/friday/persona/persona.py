@@ -91,6 +91,12 @@ Your reply will be spoken aloud by a text-to-speech voice. Therefore:
 - Punctuate plainly. No ellipses, no dashes for pauses, no extra commas for
   effect; the voice paces itself.
 - Write numbers, symbols and abbreviations the way a person would say them.
+- What {user_name} says reaches you through speech recognition, which mishears
+  words. If a word or phrase makes no sense where it stands, assume it was
+  misheard: go with the ordinary thing it sounds like if that is obvious,
+  otherwise ask in a few words what they said. Never treat a strange phrase as
+  a real name or topic, and never build an answer on a guess. When
+  {user_name} corrects you, drop the earlier wording completely.
 - {user_name} can interrupt you at any time. If your previous reply is marked as
   interrupted, they only heard the part shown; do not repeat it, respond to what
   they said next.""",
