@@ -20,6 +20,7 @@ from pathlib import Path
 from friday.config import FridayConfig, default_config_path, load_config
 from friday.conversation.delegation import CodeDelegate
 from friday.conversation.engine import ConversationEngine
+from friday.conversation.notes import NoteBook
 from friday.core.errors import ConfigError, FridayError
 from friday.core.logging import configure_logging
 from friday.core.secrets import KeyringEnvSecretStore
@@ -30,7 +31,21 @@ from friday.persona.persona import Channel, Mode, Persona
 log = logging.getLogger("friday")
 
 
-def _delegate(config: FridayConfig) -> CodeDelegate | None:
+def _notes(config: FridayConfig) -> NoteBook | None:
+    memory = config.memory
+    if not memory.enabled:
+        return None
+    folder = Path(memory.folder).expanduser() if memory.folder else None
+    return NoteBook(
+        folder or default_config_path().parent / "memory",
+        user_name=config.user_name,
+        max_chars=memory.max_chars,
+        also_read=tuple(Path(p).expanduser() for p in memory.also_read),
+        share=memory.share_with_claude_code,
+    )
+
+
+def _delegate(config: FridayConfig, notes: NoteBook | None) -> CodeDelegate | None:
     cc = config.claude_code
     if not cc.enabled:
         return None
@@ -46,16 +61,19 @@ def _delegate(config: FridayConfig) -> CodeDelegate | None:
         state_path=log_dir / "session.json",
         keep_session=cc.keep_session,
         scope=str(project.resolve()),
+        notes=notes,
     )
 
 
 def _engine(config: FridayConfig, router: ProviderRouter, channel: Channel) -> ConversationEngine:
+    notes = _notes(config)
     return ConversationEngine(
         router,
         Persona(user_name=config.user_name),
         channel=channel,
         mode=config.default_mode,
-        delegate=_delegate(config),
+        delegate=_delegate(config, notes),
+        notes=notes,
     )
 
 

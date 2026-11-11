@@ -89,3 +89,17 @@ permission_mode = ""             # "" = Claude Code's own settings; "plan" = rea
 keep_session = "day"             # every task continues one Claude Code chat: "run" = until FRIDAY
                                  # closes, "day" = until midnight, "always" = until you say
                                  # "Friday, new Claude Code chat"
+
+# ---- memory: notes kept between sessions, shared with Claude Code ---------
+# "Friday, remember that ..." saves a line, word for word, in memory.md.
+# Every task passed to Claude Code is added to worklog.md with its outcome.
+# She is shown both at the start of each session, and Claude Code gets them
+# with a task. They are plain text: open, edit or delete them any time.
+# Do not have her remember passwords or keys.
+
+[memory]
+enabled = true
+folder = ""                      # "" = a "memory" folder next to this file
+max_chars = 1200                 # how much she is shown; more makes her slower to start
+also_read = []                   # other files to show her, e.g. ["C:/Users/you/Projects/app/CLAUDE.md"]
+share_with_claude_code = true    # pass the notes to Claude Code along with a task

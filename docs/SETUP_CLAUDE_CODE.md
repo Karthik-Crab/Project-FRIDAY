@@ -111,13 +111,35 @@ answer. If it fails with "could not start Claude Code", record the exact message
 - **H. Only if the owner chose `acceptEdits`:** a small real change ("add a line
   to the README saying hello"), then check the file.
 
+## Stage 5: shared memory (owner present)
+
+Memory is on by default; nothing needs adding to the config. The files are in
+`%APPDATA%\FRIDAY\memory\`.
+
+- **M1. Remember.** "Friday, remember that my test word is marmalade." She repeats
+  it. `memory.md` now has that line, word for word (record the line: it shows how
+  the sentence was transcribed).
+- **M2. After a restart.** Close `friday voice`, start it again, ask "What is my
+  test word?" She should know. Then ask something she has no note about ("What did
+  I have for lunch yesterday?"): she must say she does not know, not invent it.
+- **M3. Claude Code sees it.** "Friday, new Claude Code chat", then "ask Claude
+  Code what my test word is". The spoken result should contain the word.
+- **M4. Work log.** After M3, restart and ask "What did Claude Code do last?" She
+  should describe the last task from `worklog.md`.
+- **M5. Recall and forget.** "Friday, what do you remember?" reads the notes back.
+  "Friday, forget that" removes the newest one; check the file.
+- **M6. False triggers.** Say "Do you remember what I said?" and "Remember that
+  film we saw?": neither may add a line to `memory.md`.
+- **M7. Speed.** Compare the first `first audio` latency of a session with and
+  without notes (rename the `memory` folder for one run). Report both numbers.
+
 ## Report
 
 Append a `# Claude Code by voice` section to `backend\SETUP_REPORT.md`:
 
 1. Claude Code version, and whether `claude` is an `.exe` or `.cmd`.
 2. The permission mode the owner chose.
-3. Pass or fail for checks 1 to 3 and A to H (including F2), with the terminal lines.
+3. Pass or fail for checks 1 to 3, A to H (including F2) and M1 to M7, with the terminal lines.
 4. For B: every read-back that was wrong, with what the owner actually said.
 5. How long each task took from "Sent" to the spoken result.
 6. How the spoken summaries sounded: clear, too long, or reading out code or

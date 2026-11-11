@@ -101,6 +101,20 @@ class ClaudeCodeSettings(_Strict):
     keep_session: Literal["run", "day", "always"] = "day"
 
 
+class MemorySettings(_Strict):
+    """Notes kept between sessions, shared with Claude Code."""
+
+    enabled: bool = True
+    # Where memory.md and worklog.md live. "" = a memory folder next to the config.
+    folder: str = ""
+    # How much of the notes the voice model is shown. More is slower to start.
+    max_chars: int = Field(default=1200, ge=200, le=8000)
+    # Other files to read in as well, e.g. a Claude Code CLAUDE.md.
+    also_read: list[str] = Field(default_factory=list)
+    # Pass the notes to Claude Code along with a task.
+    share_with_claude_code: bool = True
+
+
 def _default_providers() -> dict[str, ProviderConfig]:
     return {"local": ProviderConfig(kind="ollama", model="llama3.2:3b")}
 
@@ -119,6 +133,7 @@ class FridayConfig(_Strict):
     voice: VoiceSettings = Field(default_factory=VoiceSettings)
     realtime: RealtimeSettings = Field(default_factory=RealtimeSettings)
     claude_code: ClaudeCodeSettings = Field(default_factory=ClaudeCodeSettings)
+    memory: MemorySettings = Field(default_factory=MemorySettings)
 
     @model_validator(mode="after")
     def _check_routes(self) -> FridayConfig:

@@ -82,7 +82,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 pytest
 ```
 
-Expected: all tests pass (117 at the time of writing).
+Expected: all tests pass (127 at the time of writing).
 
 **Check 2b:** the scripted voice session runs without a microphone or speech
 models. It does use the configured language model, so if no cloud key is stored

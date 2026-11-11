@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from friday.conversation.delegation import CodeDelegate
 from friday.conversation.memory import INTERRUPTED_MARKER, ConversationWindow
+from friday.conversation.notes import NoteBook
 from friday.core.errors import ProviderError
 from friday.core.messages import ChatRequest, Role
 from friday.llm.base import ProviderInfo
@@ -57,6 +58,7 @@ class ConversationEngine:
         mode: Mode = Mode.COMPANION,
         max_tokens: dict[Channel, int] | None = None,
         delegate: CodeDelegate | None = None,
+        notes: NoteBook | None = None,
     ) -> None:
         self.router = router
         self.persona = persona or Persona()
@@ -66,12 +68,15 @@ class ConversationEngine:
         self._max_tokens = max_tokens or {Channel.VOICE: 400, Channel.TEXT: 1500}
         self.last_turn = TurnInfo(mode=mode)
         self.delegate = delegate
+        self.notes = notes
 
     def is_control(self, text: str) -> bool:
         """Answered by FRIDAY's own fixed logic, not by the language model."""
         if parse_command(text) is not None:
             return True
-        return self.delegate is not None and self.delegate.concerns(text)
+        if self.delegate is not None and self.delegate.concerns(text):
+            return True
+        return self.notes is not None and self.notes.concerns(text)
 
     @property
     def awaiting_answer(self) -> bool:
@@ -108,6 +113,10 @@ class ConversationEngine:
         )
 
     def _extra_context(self) -> str | None:
+        parts = [self._delegate_context(), self.notes.context() if self.notes else None]
+        return "\n\n".join(p for p in parts if p) or None
+
+    def _delegate_context(self) -> str | None:
         if self.delegate is None:
             return None
         name = self.delegate.name
@@ -145,6 +154,14 @@ class ConversationEngine:
         if self.delegate is not None:
             reply = self.delegate.handle(user_text)
             if reply is not None:  # also control, not conversation
+                turn.was_command = True
+                turn.full_text = reply
+                yield reply
+                return
+
+        if self.notes is not None:
+            reply = self.notes.handle(user_text)
+            if reply is not None:  # stored on disk, not in the conversation
                 turn.was_command = True
                 turn.full_text = reply
                 yield reply

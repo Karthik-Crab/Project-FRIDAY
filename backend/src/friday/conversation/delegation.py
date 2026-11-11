@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
+from friday.conversation.notes import NoteBook
 from friday.core.errors import FridayError
 from friday.integrations.claude_code import CodeAgent, CodeResult, spoken_summary
 
@@ -83,6 +84,7 @@ class CodeDelegate:
         state_path: Path | None = None,
         keep_session: str = "run",
         scope: str = "",
+        notes: NoteBook | None = None,
     ) -> None:
         self.agent = agent
         self.log_dir = log_dir
@@ -98,6 +100,10 @@ class CodeDelegate:
         self.keep_session = keep_session
         self.scope = scope
         self._load_session()
+        # Shared memory: passed along with the first task of a chat, and again
+        # when a note has been added; each finished task goes into its work log.
+        self.notes = notes
+        self._notes_sent = ""
 
     @property
     def busy(self) -> bool:
@@ -157,8 +163,15 @@ class CodeDelegate:
         return f"For {self.name}: {self.pending} Shall I send it?"
 
     async def _run(self, task: str) -> None:
+        background = sent = ""
+        if self.notes is not None:
+            sent = self.notes.for_agent(fresh=False)
+            if self.session_id is None:
+                background = self.notes.for_agent(fresh=True)
+            elif sent != self._notes_sent:
+                background = sent
         try:
-            result = await self.agent.run(task, self.session_id)
+            result = await self.agent.run(task + background, self.session_id)
         except FridayError as exc:
             log.error("code agent failed: %s", exc)
             result = CodeResult(text=str(exc), ok=False)
@@ -170,11 +183,16 @@ class CodeDelegate:
         elif not result.ok and "no conversation found" in result.text.lower():
             self.session_id = None  # the remembered chat is gone: start fresh next time
         self._save_session()
-        path = self._write_log(task, result)
         if result.ok:
-            spoken = f"{self.name} is done. {spoken_summary(result.text)}"
+            self._notes_sent = sent
+        path = self._write_log(task, result)
+        summary = spoken_summary(result.text)
+        if result.ok:
+            spoken = f"{self.name} is done. {summary}"
         else:
-            spoken = f"{self.name} ran into a problem. {spoken_summary(result.text)}"
+            spoken = f"{self.name} ran into a problem. {summary}"
+        if self.notes is not None:
+            self.notes.log_work(task, summary, result.ok)
         if self.on_done is not None:
             try:
                 self.on_done(Notice(task=task, spoken=spoken.strip(), ok=result.ok, log_path=path))

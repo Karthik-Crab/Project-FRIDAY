@@ -152,6 +152,19 @@ cooldown. A failure after text has been spoken is surfaced instead, because spli
 two models mid-sentence would be audible. `--offline` filters out providers that are
 not local. `--provider` / `/provider` overrides the routing.
 
+**Shared memory.** `conversation/notes.py` keeps two plain files (by default in a
+`memory` folder next to the config): `memory.md`, one line per thing the owner asked
+to have remembered, and `worklog.md`, one line per task passed to Claude Code with
+its outcome. Writing is done by fixed logic ("remember that ...", "forget that",
+"what do you remember"), never by the language model, so a small local model cannot
+invent or reword a note. Reading is the only way the voice model knows anything
+about earlier sessions: a capped extract (`memory.max_chars`) is added to its
+prompt. The same extract is sent to Claude Code on standard input with the first
+task of a chat, and again when a note is added. Claude Code's own memory cannot be
+queried from outside; what can be shared is files, so `memory.also_read` lets the
+voice model read files Claude Code maintains (a `CLAUDE.md`), and `memory.folder`
+can be placed inside a project so that project's `CLAUDE.md` can import the notes.
+
 ## Adding things
 
 - **A new LLM provider:** add a module in `llm/providers/` implementing `LLMProvider`,
