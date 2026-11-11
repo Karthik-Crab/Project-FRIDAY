@@ -58,6 +58,8 @@ class VoiceSettings(_Strict):
     tts_voices_path: str = "models/voices-v1.0.bin"
     tts_voice: str = "af_heart"
     tts_speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    sentence_pause_ms: float = Field(default=250.0, ge=0, le=1500)
+    max_chunk_chars: int = Field(default=300, ge=40, le=500)
     input_device: int | str | None = None
     output_device: int | str | None = None
     end_silence_ms: float = Field(default=700.0, ge=200, le=3000)

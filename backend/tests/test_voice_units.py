@@ -92,9 +92,10 @@ def test_chunker_first_chunk_early_then_sentences() -> None:
     for token in text.split(" "):
         out += c.feed(token + " ")
     out += c.flush()
-    assert out[0] == "The thing about octopuses,"  # early clause break for fast first audio
-    # after the first chunk, clauses are not split
-    assert "which most people never realise, is how clever they are." in out
+    # whole sentences: a comma is not a reason to stop and start again
+    assert out[0] == (
+        "The thing about octopuses, which most people never realise, is how clever they are."
+    )
     assert not any(chunk.endswith("Dr.") for chunk in out)  # abbreviation not split
     assert out[-1] == "Bye"
     assert " ".join(out).split() == text.split()
@@ -228,11 +229,20 @@ async def test_kokoro_adapter_reuses_one_worker_thread() -> None:
 # ---- second hardware run ----------------------------------------------------
 
 
-def test_short_opening_sentence_is_spoken_at_once_but_not_a_lone_word_clause() -> None:
+def test_short_opening_waits_for_the_sentence_after_it() -> None:
     c = SentenceChunker()
-    assert c.feed("Oh, nice. That sounds ") == ["Oh, nice."]
+    assert c.feed("Oh, nice. That sounds ") == []
+    assert c.feed("like a lovely plan. And ") == ["Oh, nice. That sounds like a lovely plan."]
     c = SentenceChunker()
     assert c.feed("Well, I think that ") == []
+    c = SentenceChunker()
+    assert [*c.feed("Sure."), *c.flush()] == ["Sure."]  # a short whole reply is still said
+
+
+def test_only_a_long_first_sentence_is_cut_at_a_clause() -> None:
+    c = SentenceChunker()
+    start = "When I look at everything you have told me about the trip so far,"
+    assert c.feed(start + " it seems ") == [start]
 
 
 def test_stage_directions_are_not_read_out() -> None:

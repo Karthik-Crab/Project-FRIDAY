@@ -246,6 +246,8 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
         barge_in_min_ms=v.barge_in_min_ms,
         max_merges=v.max_merges,
         acknowledgements=tuple(v.acknowledgements),
+        sentence_pause_ms=v.sentence_pause_ms,
+        max_chunk_chars=v.max_chunk_chars,
         segmenter=SegmenterConfig(end_silence_ms=v.end_silence_ms),
     )
     engine = _engine(config, router, Channel.VOICE)

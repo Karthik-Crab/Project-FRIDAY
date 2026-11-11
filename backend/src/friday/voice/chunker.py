@@ -1,8 +1,10 @@
 """Split a streaming LLM reply into speakable chunks.
 
-Time-to-first-audio matters more than anything else for perceived latency, so
-the first chunk may break early at a clause boundary; later chunks prefer whole
-sentences because TTS prosody is better with complete sentences.
+Every chunk is synthesised on its own, and the voice starts each one with fresh
+intonation, so small chunks sound like a list being read out. Chunks are
+therefore whole sentences; a very short opening ("Oh, nice.") waits for the
+sentence after it, and only a long first sentence is cut at a clause so the
+wait for the first audio stays bounded.
 """
 
 from __future__ import annotations
@@ -17,13 +19,11 @@ _CLAUSE_END = re.compile("[,;:\u2013\u2014](?=\\s)")  # incl. en/em dash
 class SentenceChunker:
     def __init__(
         self,
-        first_min_chars: int = 4,
+        first_min_chars: int = 24,
         min_chars: int = 40,
         max_chars: int = 250,
-        first_clause_min_chars: int = 10,
+        first_clause_min_chars: int = 60,
     ) -> None:
-        # A short opening sentence ("Oh, nice.") is spoken at once; a clause
-        # must be a little longer, or a lone "Well," gets its own odd pause.
         self._first_min = first_min_chars
         self._first_clause_min = first_clause_min_chars
         self._min = min_chars

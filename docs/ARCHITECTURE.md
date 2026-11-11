@@ -60,8 +60,11 @@ These are the rules that keep the system replaceable. Breaking one needs an ADR.
    - anything else → cancel any active turn and start a new one.
 4. In the turn, a producer streams text from the engine, cuts it into sentences
    (`SentenceChunker`), strips markdown (`SpeechSanitizer`) and synthesises audio into
-   a queue of two items. The consumer plays the chunks. Sentence N+1 is synthesised
-   while sentence N plays.
+   a queue of two items. The consumer plays the chunks. The next piece is synthesised
+   while the current one plays. The voice engine restarts its intonation with every
+   call, so sentences that are already waiting are synthesised together (as many as
+   the audio already queued leaves time for, up to `max_chunk_chars`), and a pause of
+   `sentence_pause_ms` is added after each piece because the engine trims its own.
 5. `TurnMetrics` records STT, first-token and first-audio latency for every turn.
 
 ### Barge-in (two-stage)

@@ -6,6 +6,8 @@ automated acceptance tests for Phase 1's interaction requirements.
 
 import asyncio
 
+import pytest
+
 from friday.conversation.engine import ConversationEngine
 from friday.conversation.memory import INTERRUPTED_MARKER
 from friday.core.messages import Role
@@ -483,8 +485,8 @@ async def test_acknowledgement_plays_first_and_is_not_repeated_by_the_reply() ->
     await asyncio.wait_for(session.run(), 20)
 
     # both clips are prepared up front; the reply does not say "Hmm" again
-    assert tts.spoken == ["Hmm.", "Okay.", "Good question.", "They have three hearts."]
-    assert len(sink.played) == 3  # the clip, then two sentences
+    assert tts.spoken == ["Hmm.", "Okay.", "Good question. They have three hearts."]
+    assert len(sink.played) == 2  # the clip, then the reply in one breath
     metrics = done(events)[0].metrics
     assert metrics.ack_ms is not None and metrics.ack_ms <= (metrics.first_audio_ms or 0)
     # the sound is not part of the conversation
@@ -513,3 +515,37 @@ async def test_no_acknowledgement_for_short_answers_commands_or_work_mode() -> N
 
     assert engine.mode is Mode.WORK
     assert [e.metrics.ack_ms for e in done(events)] == [None, None, None]
+
+
+# ---- natural flow -----------------------------------------------------------
+
+
+async def test_sentences_that_are_ready_together_are_spoken_as_one_piece() -> None:
+    reply = (
+        "Octopuses are remarkable animals, honestly. They have three hearts. "
+        "Two of them pump blood through the gills. The third one feeds the rest of the body. "
+        "And their blood is blue."
+    )
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),
+            WaitFor(lambda: len(done(events)) >= 1, timeout_s=15),
+        ],
+        ["Tell me something about octopuses."],
+        reply=reply,
+    )
+    await asyncio.wait_for(session.run(), 30)
+
+    assert " ".join(tts.spoken) == reply  # nothing lost or reordered
+    assert len(tts.spoken) < 5  # not one piece per sentence
+    assert any(piece.count(".") >= 2 for piece in tts.spoken)
+
+
+def test_a_pause_is_added_after_a_piece() -> None:
+    audio = vs.AudioChunk(b"\x01\x00" * 16000, 16000)
+    padded = vs._with_pause(audio, 250)
+    assert padded.duration_s == pytest.approx(1.25)
+    assert padded.pcm.endswith(b"\x00\x00" * 4000)
+    assert vs._with_pause(audio, 0) is audio

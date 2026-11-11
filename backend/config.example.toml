@@ -57,6 +57,8 @@ tts_model_path = "models/kokoro-v1.0.onnx"
 tts_voices_path = "models/voices-v1.0.bin"
 tts_voice = "af_heart"
 tts_speed = 1.0
+sentence_pause_ms = 250   # breath between spoken pieces; lower = more hurried
+max_chunk_chars = 300     # sentences ready together are voiced as one piece, up to this size
 end_silence_ms = 700             # pause length that ends your turn
 barge_in_min_ms = 300            # how long you must speak to interrupt
 # speech_threshold_while_speaking = 0.6   # check your mic with: friday mic

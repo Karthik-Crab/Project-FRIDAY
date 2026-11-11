@@ -29,7 +29,7 @@ pip install -e ".[dev,secrets,voice,realtime]"
 pytest
 ```
 
-**Check 1:** 127 passed.
+**Check 1:** 130 passed.
 
 ## Stage 2: config and microphone level
 
@@ -102,6 +102,13 @@ terminal output.
 - **G. Regression.** Interrupt a long answer (she stops), say "mm-hmm" during a
   long answer (she continues), say "stop" (she stops, no reply), "Friday, work
   mode" then one question (short answer, no clip), "Friday, companion mode".
+- **H. Flow.** Ask two questions that need an answer of four or five sentences
+  ("Explain how a rainbow forms", "What should I think about before buying a
+  laptop?"). Listen for the rhythm only: does it sound like one person talking
+  in one breath, or like separate sentences read out one at a time? Note any
+  odd gap, any place two sentences collide with no pause, and how long she took
+  to start. Then set `sentence_pause_ms = 150` and repeat once; say which
+  setting sounded better.
 
 Also do steps 7, 9 and 10 of [TESTING.md](TESTING.md), which were not tried in
 run 2.

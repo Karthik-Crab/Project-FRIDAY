@@ -95,6 +95,12 @@ class VoiceConfig:
     # utterances of at least ``ack_min_words`` words. Empty: none.
     acknowledgements: tuple[str, ...] = ()
     ack_min_words: int = 4
+    # Silence added after each synthesised piece (the voice engine trims its
+    # own, so without this sentences run into each other).
+    sentence_pause_ms: float = 250.0
+    # Sentences that are ready together are spoken as one piece, up to this
+    # many characters, so the voice carries its intonation across them.
+    max_chunk_chars: int = 300
     segmenter: SegmenterConfig = field(default_factory=SegmenterConfig)
 
 
@@ -543,9 +549,42 @@ class VoiceSession:
         chunker = SentenceChunker()
         sanitizer = SpeechSanitizer()
         first = True
+        pending: list[str] = []  # complete sentences not yet synthesised
+        more = asyncio.Event()
+        finished = False
+        produced_s = 0.0  # audio handed to the player so far
+        started_at: float | None = None  # when the first of it was handed over
+        pace = 0.6  # seconds of synthesis per second of audio, measured as we go
 
-        async def speak(piece: str) -> None:
-            nonlocal first
+        async def read() -> None:
+            nonlocal finished
+            try:
+                async with aclosing(notice or self.engine.respond(text)) as stream:
+                    async for delta in stream:
+                        if metrics.first_token_ms is None:
+                            metrics.first_token_ms = (loop.time() - ended_at) * 1000
+                        pending.extend(chunker.feed(delta))
+                        if pending:
+                            more.set()
+                pending.extend(chunker.flush())
+            finally:
+                finished = True
+                more.set()
+
+        def take() -> str:
+            """The next piece to synthesise: as many waiting sentences as the
+            audio already queued gives time for, and always at least one."""
+            ahead = 0.0
+            if started_at is not None:
+                ahead = max(0.0, produced_s - (loop.time() - started_at))
+            budget = min(self.config.max_chunk_chars, ahead / max(pace, 0.05) * _CHARS_PER_S)
+            piece = pending.pop(0)
+            while pending and len(piece) + 1 + len(pending[0]) <= budget:
+                piece = f"{piece} {pending.pop(0)}"
+            return piece
+
+        async def speak(piece: str, last: bool) -> None:
+            nonlocal first, produced_s, started_at, pace
             cleaned = sanitizer.clean(piece)
             if first and ack_text:
                 cleaned = _drop_echo(cleaned, ack_text)  # not "Hmm. Hmm, ..."
@@ -554,23 +593,38 @@ class VoiceSession:
                 # While the user is talking over us, do not compete with speech
                 # recognition for the CPU; synthesise again once that is settled.
                 await self._resume.wait()
+                begun = loop.time()
                 audio = await self.tts.synthesize(cleaned)
+                if audio.duration_s > 0.2:
+                    pace = 0.5 * pace + 0.5 * (loop.time() - begun) / audio.duration_s
+                if not last:
+                    audio = _with_pause(audio, self.config.sentence_pause_ms)
                 await queue.put((cleaned, audio))
+                if started_at is None:
+                    started_at = loop.time()
+                produced_s += audio.duration_s
 
+        reader = loop.create_task(read())
         try:
-            async with aclosing(notice or self.engine.respond(text)) as stream:
-                async for delta in stream:
-                    if metrics.first_token_ms is None:
-                        metrics.first_token_ms = (loop.time() - ended_at) * 1000
-                    for piece in chunker.feed(delta):
-                        await speak(piece)
-            for piece in chunker.flush():
-                await speak(piece)
+            while True:
+                if not pending:
+                    if finished:
+                        break
+                    more.clear()
+                    await more.wait()
+                    continue
+                piece = take()
+                await speak(piece, last=finished and not pending)
+            await reader  # raises here if the reply failed part-way
             await queue.put(_END)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # hand the failure to the consumer
             await queue.put(exc)
+        finally:
+            if not reader.done():
+                reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
 
     def _provider_name(self) -> str | None:
         info = self.engine.last_turn.provider
@@ -589,6 +643,16 @@ class VoiceSession:
                 self._on_event(event)
             except Exception:  # a broken UI listener must not kill the voice loop
                 log.exception("voice event listener failed")
+
+
+_CHARS_PER_S = 14.0  # spoken English, roughly
+
+
+def _with_pause(audio: AudioChunk, pause_ms: float) -> AudioChunk:
+    samples = int(audio.sample_rate * max(0.0, pause_ms) / 1000)
+    if not samples:
+        return audio
+    return AudioChunk(audio.pcm + b"\x00\x00" * samples, audio.sample_rate)
 
 
 def _truncate_words(text: str, fraction: float) -> str:
