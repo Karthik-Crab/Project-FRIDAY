@@ -59,6 +59,10 @@ tts_model_path = "models/kokoro-v1.0.onnx"
 tts_voices_path = "models/voices-v1.0.bin"
 tts_voice = "af_heart"
 tts_speed = 1.0
+# An expressive voice (laughs, sighs) from backend/servers/chatterbox_server.py,
+# for a PC with an NVIDIA card. Used first; the voice above is the fallback.
+# Must be on this machine. See docs/SETUP_NOBARA.md, stage 15.
+# tts_server_url = "http://127.0.0.1:5005"
 sentence_pause_ms = 250   # breath between spoken pieces; lower = more hurried
 max_chunk_chars = 300     # sentences ready together are voiced as one piece, up to this size
 end_silence_ms = 700             # pause length that ends your turn

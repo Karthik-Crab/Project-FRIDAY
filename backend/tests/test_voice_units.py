@@ -1,6 +1,7 @@
 import asyncio
 
 import numpy as np
+import pytest
 
 from friday.voice.adapters.faster_whisper_stt import FasterWhisperSTT, pcm16_to_float32
 from friday.voice.adapters.kokoro_tts import KokoroTTS, float_to_pcm16
@@ -292,3 +293,137 @@ async def test_listen_prints_what_was_heard_and_nothing_else() -> None:
     assert len(lines) == 2
     assert lines[0].startswith("heard> Explain how a rainbow works.")
     assert lines[1].startswith("heard> (nothing)")
+
+
+# ---- expressive voice ------------------------------------------------------
+
+
+def test_stage_directions_become_marks_only_for_a_voice_that_can_make_them() -> None:
+    from friday.voice.sanitize import SpeechSanitizer, strip_expression_tags
+
+    text = "Oh no *laughs* that old trick. [sigh] Fine. (giggles) Really [whisper] now."
+    plain = SpeechSanitizer().clean(text)
+    assert "[" not in plain and "laugh" not in plain
+
+    marked = SpeechSanitizer(("laugh", "sigh")).clean(text)
+    assert marked == "Oh no [laugh] that old trick. [sigh] Fine. Really now."
+    assert (
+        strip_expression_tags(marked, ("laugh", "sigh"))
+        == "Oh no that old trick. Fine. Really now."
+    )
+
+
+def test_the_prompt_names_the_marks_only_when_the_voice_has_them() -> None:
+    from friday.persona.persona import Channel, Mode, Persona
+
+    plain = Persona().system_prompt(Mode.COMPANION, Channel.VOICE)
+    assert "[laugh]" not in plain
+    expressive = Persona(expression_tags=("laugh", "sigh"))
+    assert "[laugh], [sigh]" in expressive.system_prompt(Mode.COMPANION, Channel.VOICE)
+    assert "[laugh]" not in expressive.system_prompt(Mode.COMPANION, Channel.TEXT)
+
+
+def _voice_service(fail: bool = False) -> tuple[object, list[str]]:
+    """The real HTTP handler from servers/chatterbox_server.py with a stand-in model."""
+    import importlib.util
+    import threading
+    from http.server import ThreadingHTTPServer
+    from pathlib import Path
+
+    path = Path(__file__).parent.parent / "servers" / "chatterbox_server.py"
+    spec = importlib.util.spec_from_file_location("chatterbox_server", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    said: list[str] = []
+
+    class StandIn:
+        name, device, sample_rate = "stand-in", "cpu", 22_050
+
+        def speak(self, text: str) -> bytes:
+            if fail:
+                raise RuntimeError("out of memory")
+            said.append(text)
+            return b"\x01\x00" * 100
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), module.make_handler(StandIn()))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, said
+
+
+async def test_remote_voice_speaks_through_the_local_service() -> None:
+    from friday.voice.adapters.remote_tts import RemoteTTS
+
+    server, said = _voice_service()
+    try:
+        tts = RemoteTTS(f"http://127.0.0.1:{server.server_address[1]}")  # type: ignore[attr-defined]
+        assert (await tts.health())["model"] == "stand-in"
+        audio = await tts.synthesize("Hello [laugh] there.")
+        assert said == ["Hello [laugh] there."]
+        assert audio.sample_rate == 22_050 and len(audio.pcm) == 200
+    finally:
+        server.shutdown()  # type: ignore[attr-defined]
+
+
+async def test_voice_service_rejects_bad_requests_and_reports_failures() -> None:
+    import httpx
+
+    from friday.core.errors import VoiceError
+    from friday.voice.adapters.remote_tts import RemoteTTS
+
+    server, _ = _voice_service(fail=True)
+    base = f"http://127.0.0.1:{server.server_address[1]}"  # type: ignore[attr-defined]
+    try:
+        async with httpx.AsyncClient(base_url=base) as client:
+            assert (await client.post("/speak", json={"text": ""})).status_code == 400
+            assert (await client.post("/speak", json={"text": "x" * 2000})).status_code == 400
+            assert (await client.post("/speak", content=b"not json")).status_code == 400
+            assert (await client.get("/elsewhere")).status_code == 404
+        with pytest.raises(VoiceError):
+            await RemoteTTS(base).synthesize("Hello.")
+    finally:
+        server.shutdown()  # type: ignore[attr-defined]
+
+
+async def test_fallback_voice_takes_over_and_the_expressive_one_is_retried_later() -> None:
+    from friday.core.errors import VoiceError
+    from friday.voice.adapters.remote_tts import FallbackTTS
+    from friday.voice.base import AudioChunk
+    from friday.voice.fakes import FakeTTS
+
+    class Expressive(FakeTTS):
+        expression_tags = ("laugh",)
+        up = False
+
+        async def synthesize(self, text: str) -> AudioChunk:
+            if not self.up:
+                raise VoiceError("card is busy")
+            return await super().synthesize(text)
+
+    now = [0.0]
+    changes: list[bool] = []
+    primary, builtin = Expressive(), FakeTTS()
+    tts = FallbackTTS(primary, builtin, 30.0, changes.append, clock=lambda: now[0])
+    assert tts.expression_tags == ("laugh",)
+
+    await tts.synthesize("Ha [laugh] nice.")
+    assert builtin.spoken == ["Ha nice."]  # the built-in voice never sees the mark
+    primary.up = True
+    await tts.synthesize("Still waiting.")
+    assert primary.spoken == []  # not retried on every sentence
+
+    now[0] = 31.0
+    await tts.synthesize("Back [laugh] again.")
+    assert primary.spoken == ["Back [laugh] again."]
+    assert changes == [False, True]
+
+
+def test_voice_service_address_must_be_this_machine() -> None:
+    from pydantic import ValidationError
+
+    from friday.config import VoiceSettings
+
+    assert VoiceSettings(tts_server_url="http://127.0.0.1:5005").tts_server_url
+    for bad in ("http://192.168.1.20:5005", "https://example.com", "ftp://localhost"):
+        with pytest.raises(ValidationError):
+            VoiceSettings(tts_server_url=bad)

@@ -48,6 +48,19 @@ These are the rules that keep the system replaceable. Breaking one needs an ADR.
 
 ## Key flows
 
+### Two voices
+
+The built-in voice (Kokoro, on the CPU) only reads words. On a machine with an
+NVIDIA card, `tts_server_url` adds an expressive voice: Chatterbox, running as a
+separate process (`backend/servers/chatterbox_server.py`) in its own Python
+environment and reachable on this machine only. `FallbackTTS` uses it first and
+goes back to Kokoro when it does not answer, trying it again every 30 seconds,
+so stopping that process frees the card without silencing FRIDAY. When the
+expressive voice is in use the model is told it may write `[laugh]`, `[chuckle]`,
+`[sigh]` or `[gasp]`; the sanitizer turns stage directions into those marks, and
+they are removed again from anything Kokoro has to say. Not yet run with the
+real model.
+
 ### A voice turn
 
 1. `MicrophoneSource` yields 20 ms PCM frames. The frame loop never blocks.

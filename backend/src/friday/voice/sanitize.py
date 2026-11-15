@@ -8,6 +8,7 @@ keeps FRIDAY from reading out asterisks, hashes and URLs.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 _URL = re.compile(r"https?://\S+")
@@ -20,6 +21,13 @@ _STAGE_WORDS = re.compile(
     r"|nod|shrug|whisper)",
     re.IGNORECASE,
 )
+# Which sound a stage direction stands for, when the voice can make sounds.
+_TAG_FOR = (
+    (re.compile(r"^\W*(?:chuckl|giggl)", re.IGNORECASE), "chuckle"),
+    (re.compile(r"^\W*laugh", re.IGNORECASE), "laugh"),
+    (re.compile(r"^\W*sigh", re.IGNORECASE), "sigh"),
+    (re.compile(r"^\W*gasp", re.IGNORECASE), "gasp"),
+)
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
 _BULLET = re.compile(r"^\s*(?:[-*+•]|\d+[.)])\s+", re.MULTILINE)
 _EMOJI = re.compile("[\U0001f300-\U0001faff\U00002600-\U000027bf\U0001f000-\U0001f2ff️‍]")
@@ -29,7 +37,10 @@ _SPACES = re.compile(r"[ \t]{2,}")
 class SpeechSanitizer:
     """Stateful because fenced code blocks can span several chunks."""
 
-    def __init__(self) -> None:
+    def __init__(self, expression_tags: Iterable[str] = ()) -> None:
+        # Sounds the voice can make itself, written as [laugh]. Empty for a
+        # voice that can only read words: every stage direction is then removed.
+        self._tags = frozenset(expression_tags)
         self._in_code = False
         self._announced_code = False
 
@@ -48,12 +59,26 @@ class SpeechSanitizer:
         cleaned = _LINK.sub(r"\1", cleaned)
         cleaned = _URL.sub("the link", cleaned)
         cleaned = _INLINE_CODE.sub(r"\1", cleaned)
-        cleaned = _STAGE.sub(
-            lambda m: "" if _STAGE_WORDS.match(m.group()[1:-1]) else m.group(), cleaned
-        )
+        cleaned = _STAGE.sub(self._stage, cleaned)
         cleaned = _EMPHASIS.sub(r"\2", cleaned)
         cleaned = _HEADING.sub("", cleaned)
         cleaned = _BULLET.sub("", cleaned)
         cleaned = _EMOJI.sub("", cleaned)
         cleaned = cleaned.replace("\n", " ")
         return _SPACES.sub(" ", cleaned).strip()
+
+    def _stage(self, match: re.Match[str]) -> str:
+        inner = match.group()[1:-1]
+        if not _STAGE_WORDS.match(inner):
+            return match.group()
+        for pattern, tag in _TAG_FOR:
+            if tag in self._tags and pattern.match(inner):
+                return f" [{tag}] "
+        return ""
+
+
+def strip_expression_tags(text: str, tags: Iterable[str]) -> str:
+    """Remove [laugh]-style marks, for a voice that cannot make the sounds."""
+    for tag in tags:
+        text = text.replace(f"[{tag}]", " ")
+    return _SPACES.sub(" ", text).strip()

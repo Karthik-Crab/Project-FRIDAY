@@ -547,7 +547,7 @@ class VoiceSession:
     ) -> None:
         loop = asyncio.get_running_loop()
         chunker = SentenceChunker()
-        sanitizer = SpeechSanitizer()
+        sanitizer = SpeechSanitizer(getattr(self.tts, "expression_tags", ()))
         first = True
         pending: list[str] = []  # complete sentences not yet synthesised
         more = asyncio.Event()

@@ -12,8 +12,9 @@ import sys
 import tomllib
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from friday.core.errors import ConfigError
 from friday.persona.persona import Mode
@@ -61,6 +62,22 @@ class VoiceSettings(_Strict):
     tts_voices_path: str = "models/voices-v1.0.bin"
     tts_voice: str = "af_heart"
     tts_speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    # An expressive voice served by backend/servers/chatterbox_server.py. When
+    # set, it is used first and the built-in voice above is the fallback.
+    tts_server_url: str | None = None
+    tts_server_timeout_s: float = Field(default=20.0, ge=1, le=120)
+
+    @field_validator("tts_server_url")
+    @classmethod
+    def _voice_service_is_on_this_machine(cls, value: str | None) -> str | None:
+        # Everything FRIDAY says is sent there, and the service has no login.
+        if value is None:
+            return None
+        url = urlsplit(value)
+        if url.scheme != "http" or url.hostname not in ("127.0.0.1", "localhost", "::1"):
+            raise ValueError("tts_server_url must be http://127.0.0.1:<port> (this machine only)")
+        return value
+
     sentence_pause_ms: float = Field(default=250.0, ge=0, le=1500)
     max_chunk_chars: int = Field(default=300, ge=40, le=500)
     input_device: int | str | None = None

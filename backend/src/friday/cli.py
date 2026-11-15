@@ -17,6 +17,7 @@ import asyncio
 import logging
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -157,6 +158,13 @@ def _print_voice_event(event: object) -> None:
         print(f"  [error: {event.message}]")
     elif isinstance(event, vs.StateChanged):
         log.debug("state -> %s", event.state)
+
+
+def _print_voice_change(expressive: bool) -> None:
+    if expressive:
+        print("  [expressive voice is back]")
+    else:
+        print("  [expressive voice not available; using the built-in voice]")
 
 
 async def _warm_up_local(router: ProviderRouter) -> None:
@@ -355,6 +363,7 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
         )
     else:
         from friday.voice.adapters.kokoro_tts import KokoroTTS
+        from friday.voice.adapters.remote_tts import FallbackTTS, RemoteTTS
         from friday.voice.adapters.sounddevice_io import (
             MicrophoneSource,
             SpeakerSink,
@@ -366,9 +375,23 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
         print("Loading speech models...")
         whisper = _whisper(config, ("Claude Code",) if engine.delegate else ())
         stt = whisper
-        tts = KokoroTTS(v.tts_model_path, v.tts_voices_path, voice=v.tts_voice, speed=v.tts_speed)
+        kokoro = KokoroTTS(
+            v.tts_model_path, v.tts_voices_path, voice=v.tts_voice, speed=v.tts_speed
+        )
+        voice: KokoroTTS | FallbackTTS = kokoro
+        if v.tts_server_url:
+            voice = FallbackTTS(
+                RemoteTTS(v.tts_server_url, v.tts_server_timeout_s),
+                kokoro,
+                on_change=_print_voice_change,
+            )
+        tts = voice
         # Pay every start-up cost now, not on the first thing the user says.
-        await asyncio.gather(whisper.warm_up(), tts.warm_up(), _warm_up_local(router))
+        await asyncio.gather(whisper.warm_up(), voice.warm_up(), _warm_up_local(router))
+        if isinstance(voice, FallbackTTS):
+            print(f"Voice:      {'expressive' if voice.on_primary else 'built-in (fallback)'}")
+            # Tell the model which sounds this voice can make.
+            engine.persona = replace(engine.persona, expression_tags=voice.expression_tags)
         session = VoiceSession(
             engine,
             MicrophoneSource(v.input_device),

@@ -1,6 +1,7 @@
 # Setting up FRIDAY and the Local AI Studio on the Nobara desktop PC
 
 This is the one file for the desktop PC. Part 1 (stages 1 to 8) sets up FRIDAY.
+Part 3 (stage 15) gives her an expressive voice on the graphics card.
 Part 2 (stages 9 to 14) sets up the owner's Local AI Studio tools (models drive,
 Hugging Face downloader, LM Studio, ComfyUI) and collects what is needed to
 connect FRIDAY to them later.
@@ -118,7 +119,7 @@ If the clone asks for a login, the repository is private: let the owner sign in.
 pytest -q
 ```
 
-**Check 2:** 132 passed.
+**Check 2:** all tests pass (132 before the expressive voice was added, 138 after).
 
 ## Stage 3: the talking model, on the CPU
 
@@ -592,6 +593,178 @@ Create a folder `backend/handoff/` (do not commit it) containing:
 **Check 14:** the folder exists with at least one workflow file. The owner
 uploads it together with the report.
 
+# Part 3: an expressive voice
+
+## Stage 15: Chatterbox on the graphics card
+
+Needs Part 1 only. It can be done before or after Part 2.
+
+FRIDAY's built-in voice (Kokoro) is clear but flat. This stage adds Chatterbox
+Turbo, which can laugh, chuckle, sigh and gasp. It runs as a small separate
+service on this PC (`backend/servers/chatterbox_server.py`) in its own Python
+environment, because it pins its own versions of PyTorch. FRIDAY uses it first
+and goes back to Kokoro by herself whenever the service is not running.
+
+**None of this has been run with the real model.** The code is tested only
+against a stand-in. Report exact errors rather than working around them.
+
+Update first:
+
+```bash
+git pull
+```
+
+```bash
+pip install -e ".[dev,secrets,voice]"
+```
+
+```bash
+pytest -q
+```
+
+**Check 15a:** 138 passed.
+
+Chatterbox was developed on Python 3.11. Its environment is about 6 to 8 GB
+(PyTorch with the NVIDIA libraries), and it has to live on the SSD. Check the
+space with `df -h ~` first; if less than 12 GB would be left afterwards, stop
+and tell the owner.
+
+```bash
+sudo dnf install python3.11
+```
+
+```bash
+python3.11 -m venv ~/local-ai/chatterbox-venv
+```
+
+```bash
+~/local-ai/chatterbox-venv/bin/pip install chatterbox-tts
+```
+
+Keep the model files on the drive if stage 9 is done (otherwise leave this
+line out and they go to the SSD, a few GB):
+
+```bash
+export HF_HOME=/mnt/ai-hdd/ai-models/huggingface
+```
+
+Make room on the card, then start the service in its own terminal and leave it
+running. The first start downloads the model:
+
+```bash
+ollama stop llama3.1:8b
+```
+
+```bash
+~/local-ai/chatterbox-venv/bin/python servers/chatterbox_server.py --device cuda
+```
+
+- If the download asks for a Hugging Face login, the owner runs `hf auth login`
+  themselves, then start it again.
+- If it stops with "This model has no built-in voice", it needs a reference
+  recording: a clean WAV longer than 5 seconds of a voice the owner is allowed
+  to use (their own, or one with permission). Start it again with
+  `--voice /path/to/clip.wav`. Do not take a clip of a real person from the
+  internet.
+
+In another terminal:
+
+```bash
+curl -s http://127.0.0.1:5005/health
+```
+
+```bash
+nvidia-smi --query-gpu=memory.used,memory.total --format=csv
+```
+
+**Check 15b:** the health call answers with `"ok": true` and `"device": "cuda"`.
+Record the video memory the service uses.
+
+Time three sentences and listen to them. Use the `sample_rate` from the health
+call in the `aplay` line:
+
+```bash
+curl -s -o short.pcm -w "%{time_total} s\n" -X POST http://127.0.0.1:5005/speak -H "Content-Type: application/json" -d '{"text": "Oh, that is a good question."}'
+```
+
+```bash
+curl -s -o long.pcm -w "%{time_total} s\n" -X POST http://127.0.0.1:5005/speak -H "Content-Type: application/json" -d '{"text": "So a rainbow happens when sunlight goes into a raindrop, bends, bounces off the back of it and bends again on the way out, and because each colour bends by a slightly different amount, the light spreads out into that band of colours you see in the sky."}'
+```
+
+```bash
+curl -s -o laugh.pcm -w "%{time_total} s\n" -X POST http://127.0.0.1:5005/speak -H "Content-Type: application/json" -d '{"text": "Oh no [laugh] that is such a classic mistake. [sigh] Okay, let us fix it."}'
+```
+
+```bash
+aplay -f S16_LE -c 1 -r 24000 laugh.pcm
+```
+
+**Check 15c:** all three play as clear speech; the owner says whether the laugh
+and the sigh are audible as sounds, not read out as words. Record the three
+times. The short sentence should take well under a second; if it takes more
+than about 1.5 seconds, say so clearly, because every reply would start late.
+
+Now the talking model. The voice and the 8B model may not both fit on the card.
+Load the 8B model while the voice service is running and look:
+
+```bash
+ollama run llama3.1:8b "hello"
+```
+
+```bash
+ollama ps
+```
+
+If `ollama ps` shows `100% GPU`, keep `llama3.1:8b` as the `gpu` provider. If it
+shows any CPU share, change the `gpu` provider's model to `gemma3:4b`, stop the
+8B model, and check again.
+
+Point FRIDAY at the voice. Copy the config first:
+
+```bash
+cp ~/.config/friday/config.toml ~/.config/friday/config.before-voice.toml
+```
+
+In the `[voice]` section of `~/.config/friday/config.toml` add:
+
+```toml
+tts_server_url = "http://127.0.0.1:5005"
+```
+
+```bash
+friday voice
+```
+
+**Check 15d:** start-up prints `Voice:      expressive`. Hold a conversation of
+10 turns or more and capture the terminal output. Repeat V1 to V4 from stage 7,
+and add:
+
+- **V6. Expression.** Tell her something funny and something disappointing.
+  Does she ever laugh or sigh as a sound? Note any `[laugh]`-style marks in the
+  `friday>` lines and whether each was heard as a sound or read out as a word.
+- **V7. Compared with before.** The owner's plain judgement: better, the same,
+  or worse than the Kokoro voice in stage 7, and why.
+
+**Check 15e (fallback):** during a conversation, stop the voice service with
+Ctrl+C in its terminal. She must carry on in the built-in voice, with the line
+`[expressive voice not available; using the built-in voice]`. Start the service
+again; within about a minute of talking she must be back, with
+`[expressive voice is back]`.
+
+**Optional, check 15f (no graphics card):** stop the service and try the small
+model on the CPU, timing the same three sentences:
+
+```bash
+~/local-ai/chatterbox-venv/bin/python servers/chatterbox_server.py --device cpu --nano
+```
+
+This shows whether she can keep an expressive voice while the card is busy with
+an image or video job.
+
+Leave `tts_server_url` in the config only if check 15d passed and the owner
+prefers the new voice. The voice service is not started automatically yet: the
+owner starts it before `friday voice`, and stops it (Ctrl+C) to free the card.
+
 ## Report
 
 Write `backend/SETUP_REPORT.md` (do not commit it) with:
@@ -614,7 +787,11 @@ Write `backend/SETUP_REPORT.md` (do not commit it) with:
    figures of check 12b; exactly what happened in checks 12c and 12d.
 10. What was downloaded, where, and the free space left on the SSD and the
     drive.
-11. Anything that had to be done differently from this file.
+11. Part 3: pass or fail for checks 15a to 15f; video memory used by the voice
+    service; the three timings (and the CPU timings if tried); which talking
+    model shares the card with it; V6 and V7 in the owner's words; whether
+    `tts_server_url` is left in the config.
+12. Anything that had to be done differently from this file.
 
 Before saving the report, check that it and `backend/handoff/` contain no keys
 or tokens.

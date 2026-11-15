@@ -106,9 +106,21 @@ helps (short lists, code blocks). Stay as concise as the mode demands.""",
 }
 
 
+EXPRESSIVE_VOICE = """\
+Your voice can make a few sounds itself: {marks}. This replaces the rule about
+stage directions for these marks only. Write the mark exactly like that, in
+square brackets, inside the sentence at the point where the sound belongs, for
+example "Oh no [laugh] that is such a classic mistake." Use one only when the
+feeling is real, in at most one reply out of three, and never more than one in
+a reply. Nothing else goes in brackets."""
+
+
 @dataclass(frozen=True, slots=True)
 class Persona:
     user_name: str = "Karthik"
+    # Sounds the current voice can make, e.g. ("laugh", "sigh"). Empty for a
+    # voice that only reads words.
+    expression_tags: tuple[str, ...] = ()
 
     def system_prompt(self, mode: Mode, channel: Channel, extra_context: str | None = None) -> str:
         parts = [
@@ -116,6 +128,9 @@ class Persona:
             MODE_OVERLAYS[mode].format(user_name=self.user_name),
             CHANNEL_RULES[channel].format(user_name=self.user_name),
         ]
+        if channel is Channel.VOICE and self.expression_tags:
+            marks = ", ".join(f"[{tag}]" for tag in self.expression_tags)
+            parts.append(EXPRESSIVE_VOICE.format(marks=marks))
         if extra_context:
             parts.append(extra_context)
         return "\n\n".join(p.strip() for p in parts)
