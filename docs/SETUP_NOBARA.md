@@ -119,7 +119,7 @@ If the clone asks for a login, the repository is private: let the owner sign in.
 pytest -q
 ```
 
-**Check 2:** all tests pass (132 before the expressive voice was added, 138 after).
+**Check 2:** all tests pass (132 before the expressive voice was added, 139 after).
 
 ## Stage 3: the talking model, on the CPU
 
@@ -622,7 +622,7 @@ pip install -e ".[dev,secrets,voice]"
 pytest -q
 ```
 
-**Check 15a:** 138 passed.
+**Check 15a:** 139 passed.
 
 Chatterbox was developed on Python 3.11. Its environment is about 6 to 8 GB
 (PyTorch with the NVIDIA libraries), and it has to live on the SSD. Check the

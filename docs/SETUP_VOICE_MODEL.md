@@ -30,7 +30,7 @@ pip install -e ".[dev,voice]"
 pytest -q
 ```
 
-**Check 1:** 138 passed.
+**Check 1:** 139 passed.
 
 Measure the current model, so there is something to compare with:
 

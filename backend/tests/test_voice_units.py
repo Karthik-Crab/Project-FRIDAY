@@ -427,3 +427,24 @@ def test_voice_service_address_must_be_this_machine() -> None:
     for bad in ("http://192.168.1.20:5005", "https://example.com", "ftp://localhost"):
         with pytest.raises(ValidationError):
             VoiceSettings(tts_server_url=bad)
+
+
+async def test_typed_input_is_read_on_a_thread_that_cannot_block_exit() -> None:
+    import threading
+
+    from friday.cli import _read_line
+
+    seen: list[threading.Thread] = []
+
+    def read(prompt: str) -> str:
+        seen.append(threading.current_thread())
+        return "hello"
+
+    assert await _read_line("you> ", read) == "hello"
+    assert seen[0].daemon  # a pool thread would keep the program alive after Ctrl+C
+
+    def closed(prompt: str) -> str:
+        raise EOFError
+
+    with pytest.raises(EOFError):
+        await _read_line("you> ", closed)

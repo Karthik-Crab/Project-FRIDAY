@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import logging
 import sys
+import threading
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -81,6 +83,39 @@ def _engine(config: FridayConfig, router: ProviderRouter, channel: Channel) -> C
     )
 
 
+async def _read_line(prompt: str, read: Callable[[str], str] = input) -> str:
+    """Wait for a typed line without blocking the event loop.
+
+    The read happens on a daemon thread. A thread from the default pool would
+    still be waiting for Enter after Ctrl+C, and Python waits for pool threads
+    before it exits, so quitting needed a second Ctrl+C and printed a traceback.
+    """
+    loop = asyncio.get_running_loop()
+    done: asyncio.Future[str] = loop.create_future()
+
+    def settle(line: str | None, error: BaseException | None) -> None:
+        if done.done():
+            return
+        if error is not None:
+            done.set_exception(error)
+        else:
+            done.set_result(line or "")
+
+    def work() -> None:
+        try:
+            line = read(prompt)
+        except BaseException as exc:
+            error = EOFError() if isinstance(exc, KeyboardInterrupt) else exc
+            with contextlib.suppress(RuntimeError):  # the loop has already closed
+                loop.call_soon_threadsafe(settle, None, error)
+        else:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(settle, line, None)
+
+    threading.Thread(target=work, name="friday-input", daemon=True).start()
+    return await done
+
+
 async def _chat(config: FridayConfig, router: ProviderRouter) -> None:
     engine = _engine(config, router, Channel.TEXT)
     if engine.delegate is not None:
@@ -96,7 +131,7 @@ async def _chat(config: FridayConfig, router: ProviderRouter) -> None:
     print("FRIDAY text chat. /work, /companion, /provider <name|auto>, /quit")
     while True:
         try:
-            line = await asyncio.to_thread(input, f"[{engine.mode}] you> ")
+            line = await _read_line(f"[{engine.mode}] you> ")
         except (EOFError, KeyboardInterrupt):
             return
         line = line.strip()
