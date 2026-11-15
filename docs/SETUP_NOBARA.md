@@ -1,4 +1,9 @@
-# Setting up FRIDAY on the Nobara desktop PC
+# Setting up FRIDAY and the Local AI Studio on the Nobara desktop PC
+
+This is the one file for the desktop PC. Part 1 (stages 1 to 8) sets up FRIDAY.
+Part 2 (stages 9 to 14) sets up the owner's Local AI Studio tools (models drive,
+Hugging Face downloader, LM Studio, ComfyUI) and collects what is needed to
+connect FRIDAY to them later.
 
 Task brief for the coding agent (Claude Code) with shell access to the desktop
 PC. Work through the stages in order. Each stage ends with a check; do not start
@@ -20,6 +25,9 @@ happened in the report rather than skipping ahead.
   The graphics card is kept for whichever model the current task needs. Stages
   1 to 7 set up the CPU-only version. Stage 8 adds a faster talking model on the
   graphics card for the times the card is free.
+- Part 2 does not connect FRIDAY to ComfyUI or LM Studio. That needs new code,
+  which is written elsewhere once stage 14 has delivered its files. Do not try
+  to write it here.
 - All `friday` commands are run from the `backend` folder with the virtual
   environment active, because model paths in the config are relative to it.
 
@@ -33,8 +41,20 @@ happened in the report rather than skipping ahead.
   Give them the exact command and wait.
 - Leave `stt_device = "cpu"` as it is. Speech recognition on the graphics card
   is a later step.
-- Do not install or reconfigure LM Studio or ComfyUI here; they belong to the
-  owner's Local AI Studio checklist.
+- Never handle login tokens. If a download needs a Hugging Face login, the
+  owner runs `hf auth login` themselves in their own terminal.
+- LM Studio and ComfyUI have no login. Keep both listening on this PC only
+  (`127.0.0.1` / `localhost`); do not turn on any "serve on local network"
+  option and do not start ComfyUI with `--listen 0.0.0.0`.
+- Before changing a system file (`/etc/fstab`), copy it first, and show the
+  owner the exact line before they add it.
+- Tool versions move. Where a command in Part 2 does not match the installed
+  tool, check its `--help`, use the current equivalent, and note the difference
+  in the report.
+- Big downloads: say the size and where it will go, and check free space with
+  `df -h`, before starting each one.
+
+# Part 1: FRIDAY
 
 ## Stage 1: prerequisites
 
@@ -343,6 +363,235 @@ and can put the CPU-only config back at any time:
 cp ~/.config/friday/config.cpu-only.toml ~/.config/friday/config.toml
 ```
 
+# Part 2: Local AI Studio
+
+Only after Part 1 is done, or the owner says to go ahead without it. Stages 9
+to 12 are the core. Stage 13 is optional downloads. Stage 14 collects files.
+
+## Stage 9: the models drive
+
+The models live on the NTFS hard drive ("Karthik's HDD"), which should mount at
+`/mnt/ai-hdd` every time the PC starts.
+
+```bash
+lsblk -f
+```
+
+Find the NTFS partition and its UUID. If it is already mounted somewhere under
+`/run/media`, note where, and check the 36.5 GB Qwen download is there:
+
+```bash
+find /run/media /mnt -maxdepth 4 -type d -name "ai-models" 2>/dev/null
+```
+
+If Linux refuses to mount it because it was not ejected cleanly, the owner runs
+this with the real partition name:
+
+```bash
+sudo ntfsfix -d /dev/sdXN
+```
+
+Then the owner sets up the permanent mount. Use the real UUID, and the owner's
+user and group id from `id -u` and `id -g`:
+
+```bash
+sudo mkdir -p /mnt/ai-hdd
+```
+
+```bash
+sudo cp /etc/fstab /etc/fstab.before-ai-hdd
+```
+
+Line to add to `/etc/fstab`:
+
+```
+UUID=<uuid>  /mnt/ai-hdd  ntfs-3g  defaults,nofail,uid=<uid>,gid=<gid>  0  0
+```
+
+```bash
+sudo systemctl daemon-reload
+```
+
+```bash
+sudo mount -a
+```
+
+**Check 9:** `ls /mnt/ai-hdd/ai-models` shows the `qwen3.8-davidau` folder, a
+test file can be created and deleted there, and `df -h /mnt/ai-hdd` shows the
+free space. `nofail` must be in the line, so the PC still starts if the drive is
+unplugged.
+
+## Stage 10: Hugging Face downloader
+
+```bash
+sudo dnf install pipx
+```
+
+```bash
+pipx ensurepath
+```
+
+```bash
+pipx install huggingface_hub
+```
+
+Open a new terminal afterwards.
+
+**Check 10:** `hf --help` prints the command list. No login is needed for the
+public models in this brief.
+
+## Stage 11: LM Studio
+
+The owner downloads the Linux build from `https://lmstudio.ai` and starts it;
+it is a desktop program, so the clicking is theirs. Guide them through:
+
+1. Set the models folder to a folder on the drive, for example
+   `/mnt/ai-hdd/ai-models/lmstudio`. LM Studio only lists files laid out as
+   `<publisher>/<model-name>/<file>.gguf` inside that folder, so move the
+   **regular** Q4_K_M file of the Qwen download into
+   `/mnt/ai-hdd/ai-models/lmstudio/DavidAU/qwen3.8-27b/`. Move, do not copy; it
+   is 18 GB. Leave the MTP file where it is.
+2. Load the model. The first load from the hard drive takes 30 to 60 seconds.
+3. Ask it "Explain in three sentences how a rainbow forms." and note the tokens
+   per second LM Studio shows, and how many layers went to the graphics card.
+4. In the Developer tab, start the local server on port 1234. Leave "serve on
+   local network" off.
+
+```bash
+curl -s http://localhost:1234/v1/models
+```
+
+```bash
+nvidia-smi
+```
+
+**Check 11:** the model answers, the `curl` lists it, and `nvidia-smi` shows
+LM Studio using video memory. Record the model identifier exactly as the `curl`
+shows it.
+
+This model is too large for the card and is expected to be slow (a few tokens
+per second). That is fine for typed work, and too slow for FRIDAY's voice, so
+do not point FRIDAY at it. Unload it in LM Studio before the next stage.
+
+## Stage 12: ComfyUI
+
+```bash
+pipx install comfy-cli
+```
+
+Install onto the SSD (the program is about 10 to 15 GB with its Python
+packages; the models go on the hard drive):
+
+```bash
+comfy --workspace ~/ComfyUI install --nvidia
+```
+
+Point its model folders at the drive. Create
+`~/ComfyUI/extra_model_paths.yaml`:
+
+```yaml
+ai_hdd:
+  base_path: /mnt/ai-hdd/ai-models/comfyui
+  checkpoints: checkpoints
+  diffusion_models: diffusion_models
+  text_encoders: text_encoders
+  vae: vae
+  loras: loras
+```
+
+```bash
+mkdir -p /mnt/ai-hdd/ai-models/comfyui/{checkpoints,diffusion_models,text_encoders,vae,loras}
+```
+
+One image model to prove it works, about 7 GB, a single file:
+
+```bash
+hf download RunDiffusion/Juggernaut-XL-v9 Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors --local-dir /mnt/ai-hdd/ai-models/comfyui/checkpoints
+```
+
+Free the card first, then start ComfyUI:
+
+```bash
+ollama stop llama3.1:8b
+```
+
+```bash
+comfy --workspace ~/ComfyUI launch
+```
+
+The owner opens `http://127.0.0.1:8188` in the browser, loads the basic
+text-to-image template, picks the Juggernaut checkpoint, sets 1024 x 1024, and
+generates one image.
+
+**Check 12a:** an image is produced. Note how long it took and the peak video
+memory from `nvidia-smi`.
+
+Then, with ComfyUI still running, measure what FRIDAY's hand-off will rely on:
+
+```bash
+curl -s http://127.0.0.1:8188/system_stats
+```
+
+```bash
+nvidia-smi --query-gpu=memory.used,memory.total --format=csv
+```
+
+```bash
+curl -s -X POST http://127.0.0.1:8188/free -H "Content-Type: application/json" -d '{"unload_models": true, "free_memory": true}'
+```
+
+```bash
+nvidia-smi --query-gpu=memory.used,memory.total --format=csv
+```
+
+**Check 12b:** video memory in use drops after the `free` call. Record both
+figures.
+
+**Check 12c (sharing the card):** with ComfyUI idle after the `free` call, ask
+the `gpu` model a question (`ollama run llama3.1:8b "hello"`), and while it is
+still loaded generate another image. Record what happens: works, works slowly,
+or fails with an out-of-memory error. Then `ollama stop llama3.1:8b`, generate
+again, and record the time. Do not try to fix a failure here; the result is
+what matters.
+
+**Check 12d (FRIDAY during a job):** put the CPU-only config in place (end of
+stage 8), start a longer job in ComfyUI (for example a batch of 4 images), and
+while it runs have the owner hold a short `friday voice` conversation. Record
+the start delays and whether she stutters.
+
+## Stage 13: the other models (optional)
+
+Only the ones the owner asks for now. Each is large; do them one at a time, and
+generate one small test with each before moving on.
+
+- **Qwen-Image, Wan 2.2 5B, LTX, ACE-Step:** from ComfyUI's template browser,
+  which lists the exact files each workflow needs and offers to download them.
+  Make sure they land under `/mnt/ai-hdd/ai-models/comfyui`, not on the SSD.
+  Use the 5B Wan variant, not the 14B. For each: file sizes, time for one test,
+  peak video memory, and how much system RAM was used (`free -h` during the
+  job).
+- **Chatterbox and the DeBERTa router:** first confirm the repository ids exist
+  (`hf download <repo> --dry-run`, or open the page), then download into
+  `/mnt/ai-hdd/ai-models/`. Nothing uses them yet.
+- **Kokoro:** already installed for FRIDAY in stage 5. No second copy needed.
+
+## Stage 14: files for the FRIDAY hand-off
+
+Create a folder `backend/handoff/` (do not commit it) containing:
+
+1. For every workflow that worked in stages 12 and 13: the workflow exported in
+   **API format** (in ComfyUI: Workflow menu, Export (API)), named for what it
+   does, for example `image_juggernaut_api.json`. In a text file next to it,
+   say which node holds the prompt text and which holds the size or length.
+2. `system_stats.json`: the output of the `system_stats` call.
+3. `lmstudio_models.json`: the output of the `/v1/models` call.
+4. `folders.txt`: where ComfyUI writes finished files (its `output` folder),
+   the ComfyUI and LM Studio versions, and `ls -R` of
+   `/mnt/ai-hdd/ai-models` two levels deep.
+
+**Check 14:** the folder exists with at least one workflow file. The owner
+uploads it together with the report.
+
 ## Report
 
 Write `backend/SETUP_REPORT.md` (do not commit it) with:
@@ -359,6 +608,13 @@ Write `backend/SETUP_REPORT.md` (do not commit it) with:
    impression of how she sounds.
 7. Her replies from check 4c, word for word, for each config.
 8. Which config is in place at the end.
-9. Anything that had to be done differently from this file.
+9. Part 2: pass or fail for checks 9 to 14; the `/etc/fstab` line that was
+   added; LM Studio tokens per second and layers on the card; for each ComfyUI
+   model the time, peak video memory and system RAM; the before and after
+   figures of check 12b; exactly what happened in checks 12c and 12d.
+10. What was downloaded, where, and the free space left on the SSD and the
+    drive.
+11. Anything that had to be done differently from this file.
 
-Before saving the report, check that it contains no keys or tokens.
+Before saving the report, check that it and `backend/handoff/` contain no keys
+or tokens.
