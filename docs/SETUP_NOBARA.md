@@ -655,7 +655,14 @@ ai_hdd:
 mkdir -p /mnt/ai-hdd/ai-models/comfyui/{checkpoints,diffusion_models,text_encoders,vae,loras}
 ```
 
-One image model to prove it works, about 7 GB, a single file:
+One image model to prove it works, about 7 GB, a single file.
+
+**It is already on the drive**, in `/mnt/ai-hdd/ai-models/juggernaut-xl`. Do
+not download it again. Move that one `.safetensors` file into
+`/mnt/ai-hdd/ai-models/comfyui/checkpoints/` (a move on the same drive takes no
+time and no extra space). Leave the second copy in the other format where it
+is, list it in the report with its size, and let the owner decide whether to
+delete it. Only if the file is missing or the move fails, download it:
 
 ```bash
 hf download RunDiffusion/Juggernaut-XL-v9 Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors --local-dir /mnt/ai-hdd/ai-models/comfyui/checkpoints
@@ -722,9 +729,12 @@ generate one small test with each before moving on.
   Use the 5B Wan variant, not the 14B. For each: file sizes, time for one test,
   peak video memory, and how much system RAM was used (`free -h` during the
   job).
-- **Chatterbox and the DeBERTa router:** first confirm the repository ids exist
-  (`hf download <repo> --dry-run`, or open the page), then download into
-  `/mnt/ai-hdd/ai-models/`. Nothing uses them yet.
+- **Already on the drive: skip.** ACE-Step, DeBERTa and Chatterbox folders
+  exist in `/mnt/ai-hdd/ai-models/`. Before any download in this stage, look
+  there first (`du -sh /mnt/ai-hdd/ai-models/*`) and do not fetch anything that
+  is already present. For ACE-Step, point ComfyUI at the existing files (move
+  them into the matching `comfyui` subfolder) instead of using the template
+  browser's download button.
 - **Kokoro:** already installed for FRIDAY in stage 5. No second copy needed.
 
 ## Stage 14: files for the FRIDAY hand-off
@@ -798,6 +808,23 @@ line out and they go to the SSD, a few GB):
 ```bash
 export HF_HOME=/mnt/ai-hdd/ai-models/huggingface
 ```
+
+The model files do **not** need to be on the SSD. Only the Python environment
+does (it cannot live on the NTFS drive). From the drive the service just takes
+longer to start; once loaded, the model sits in video memory and the drive is
+not read again.
+
+The drive already has `/mnt/ai-hdd/ai-models/chatterbox` (about 13 GB, several
+versions). Do not try to make the service use it: the service fetches the
+Turbo version by name, in the layout it expects, and that download is small
+next to what is there. Let it download once into `HF_HOME`. For the report,
+record what the old folder holds, so it can be tidied later:
+
+```bash
+du -ah /mnt/ai-hdd/ai-models/chatterbox | sort -h | tail -40
+```
+
+Do not delete anything from it.
 
 Make room on the card, then start the service in its own terminal and leave it
 running. The first start downloads the model:
