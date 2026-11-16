@@ -13,6 +13,10 @@ happened in the report rather than skipping ahead.
 
 ## Where things stand (read this first)
 
+If you are the session that now also develops the code on this PC, read
+`docs/HANDOFF.md` first: it replaces the "do not edit" and "do not push" rules
+below.
+
 Two runs are done. Stages 1 to 7, 7R and 7S are finished, and the Chatterbox
 environment exists (`~/local-ai/chatterbox-venv`, stage 15 up to check 15a).
 The second run stopped at check 15b and reported these; `git pull` brings the
