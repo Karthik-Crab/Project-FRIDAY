@@ -50,7 +50,7 @@ pip install -e ".[dev,voice]"
 pytest -q
 ```
 
-**Check 1:** 139 passed.
+**Check 1:** 148 passed.
 
 ```powershell
 Copy-Item "$env:APPDATA\FRIDAY\config.toml" "$env:APPDATA\FRIDAY\config.before-recognition.toml"

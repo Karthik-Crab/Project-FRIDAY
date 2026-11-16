@@ -202,11 +202,13 @@ def _print_voice_change(expressive: bool) -> None:
         print("  [expressive voice not available; using the built-in voice]")
 
 
-async def _warm_up_local(router: ProviderRouter) -> None:
+async def _warm_up_local(router: ProviderRouter, system: str | None = None) -> None:
+    """Load local models, and let them read the system prompt, before the
+    first question rather than during it."""
     for provider in router.providers.values():
         warm_up = getattr(provider, "warm_up", None)
         if provider.info.local and warm_up is not None:
-            await warm_up()
+            await warm_up(system)
 
 
 async def _mic(config: FridayConfig, seconds: float) -> None:
@@ -260,7 +262,7 @@ async def _listen(config: FridayConfig, model: str | None, beam: int | None) -> 
     v = config.voice
     print(f"Microphone: {describe_device(v.input_device, 'input')}")
     print(f"Loading speech model {model or v.stt_model} (beam {beam or v.stt_beam_size})...")
-    stt = _whisper(config, (), model, beam)
+    stt = _whisper(config, model, beam)
     await stt.warm_up()
     print("Say something, pause, and read what was heard. Ctrl+C to quit.")
     await listen_loop(
@@ -301,9 +303,7 @@ async def listen_loop(
             await heard(event)
 
 
-def _whisper(
-    config: FridayConfig, extra: tuple[str, ...], model: str | None = None, beam: int | None = None
-) -> Any:
+def _whisper(config: FridayConfig, model: str | None = None, beam: int | None = None) -> Any:
     from friday.voice.adapters.faster_whisper_stt import FasterWhisperSTT
 
     v = config.voice
@@ -316,7 +316,9 @@ def _whisper(
         max_no_speech_prob=v.stt_max_no_speech_prob,
         min_avg_logprob=v.stt_min_avg_logprob,
         cpu_threads=v.stt_cpu_threads,
-        vocabulary=("Friday", config.user_name, *extra, *v.stt_vocabulary),
+        # "Claude Code" is always a hint: without it the recogniser writes
+        # "Cloud Code" or "plot code", whether or not passing tasks on is set up.
+        vocabulary=("Friday", config.user_name, "Claude Code", *v.stt_vocabulary),
     )
 
 
@@ -408,7 +410,7 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
         print(f"Microphone: {describe_device(v.input_device, 'input')}")
         print(f"Speaker:    {describe_device(v.output_device, 'output')}")
         print("Loading speech models...")
-        whisper = _whisper(config, ("Claude Code",) if engine.delegate else ())
+        whisper = _whisper(config)
         stt = whisper
         kokoro = KokoroTTS(
             v.tts_model_path, v.tts_voices_path, voice=v.tts_voice, speed=v.tts_speed
@@ -422,11 +424,18 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
             )
         tts = voice
         # Pay every start-up cost now, not on the first thing the user says.
-        await asyncio.gather(whisper.warm_up(), voice.warm_up(), _warm_up_local(router))
+
+        async def warm_voice_and_model() -> None:
+            await voice.warm_up()
+            if isinstance(voice, FallbackTTS):
+                # Tell the model which sounds this voice can make. This is part
+                # of the system prompt, so it is settled before the model reads it.
+                engine.persona = replace(engine.persona, expression_tags=voice.expression_tags)
+            await _warm_up_local(router, engine.build_request().system)
+
+        await asyncio.gather(whisper.warm_up(), warm_voice_and_model())
         if isinstance(voice, FallbackTTS):
             print(f"Voice:      {'expressive' if voice.on_primary else 'built-in (fallback)'}")
-            # Tell the model which sounds this voice can make.
-            engine.persona = replace(engine.persona, expression_tags=voice.expression_tags)
         session = VoiceSession(
             engine,
             MicrophoneSource(v.input_device),

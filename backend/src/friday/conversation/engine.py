@@ -12,7 +12,7 @@ from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from dataclasses import dataclass, field
 
-from friday.conversation.delegation import CodeDelegate
+from friday.conversation.delegation import CodeDelegate, is_agent_command, not_set_up_reply
 from friday.conversation.memory import INTERRUPTED_MARKER, ConversationWindow
 from friday.conversation.notes import NoteBook
 from friday.core.errors import ProviderError
@@ -76,6 +76,8 @@ class ConversationEngine:
             return True
         if self.delegate is not None and self.delegate.concerns(text):
             return True
+        if self.delegate is None and is_agent_command(text):
+            return True
         return self.notes is not None and self.notes.concerns(text)
 
     @property
@@ -118,10 +120,15 @@ class ConversationEngine:
 
     def _delegate_context(self) -> str | None:
         if self.delegate is None:
-            return None
+            return (
+                "You cannot run Claude Code, any other coding agent, or any program or "
+                f"command. If {self.persona.user_name} asks you to, say that it is not set "
+                'up yet. Never say "I\'m running that" or describe files, output or results: '
+                "nothing ran, so anything you described would be made up."
+            )
         name = self.delegate.name
         return (
-            f"One exception to the limits above: {name}, a coding agent on this laptop, can "
+            f"One exception to the limits above: {name}, a coding agent on this computer, can "
             f"be given tasks. That only happens when {self.persona.user_name} says "
             f'"ask {name} to ..." and then confirms; it is handled for you. Never claim '
             f"{name} did something unless its result appears in this conversation, and "
@@ -158,6 +165,14 @@ class ConversationEngine:
                 turn.full_text = reply
                 yield reply
                 return
+        elif is_agent_command(user_text):
+            # Not switched on: say so in fixed words. Left to the model, it
+            # claimed to run the task and made up the result.
+            reply = not_set_up_reply()
+            turn.was_command = True
+            turn.full_text = reply
+            yield reply
+            return
 
         if self.notes is not None:
             reply = self.notes.handle(user_text)

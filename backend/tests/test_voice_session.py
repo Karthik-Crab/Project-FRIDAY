@@ -543,6 +543,32 @@ async def test_sentences_that_are_ready_together_are_spoken_as_one_piece() -> No
     assert any(piece.count(".") >= 2 for piece in tts.spoken)
 
 
+async def test_sentences_arriving_while_she_speaks_are_joined_not_read_one_by_one() -> None:
+    """A model that writes faster than she talks, but one sentence at a time:
+    each sentence used to be voiced on its own, as it arrived."""
+    reply = (
+        "Sunlight is all the colours mixed together. A raindrop bends it as it goes in. "
+        "Each colour bends a little differently. So they fan out. "
+        "Then the light bounces back out. And that is the bow you see."
+    )
+    session, engine, provider, sink, tts, events = build(
+        [
+            Silence(300),
+            Speak(800),
+            Silence(900),
+            WaitFor(lambda: len(done(events)) >= 1, timeout_s=20),
+        ],
+        ["How does a rainbow form?"],
+        reply=reply,
+        llm_delay=0.04,  # about a sentence every 0.3 s; speaking one takes 2 s or more
+    )
+    await asyncio.wait_for(session.run(), 30)
+
+    assert " ".join(tts.spoken) == reply  # nothing lost or reordered
+    assert len(tts.spoken) <= 3  # six sentences, not six pieces
+    assert tts.spoken[0] == "Sunlight is all the colours mixed together."  # no wait to start
+
+
 def test_a_pause_is_added_after_a_piece() -> None:
     audio = vs.AudioChunk(b"\x01\x00" * 16000, 16000)
     padded = vs._with_pause(audio, 250)

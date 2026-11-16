@@ -77,6 +77,19 @@ async def ask(engine: ConversationEngine, text: str) -> str:
         ("Hey Friday, can you ask Claude to run the tests?", "run the tests?"),
         ("Pass this on to clod code: rename the module", "rename the module"),
         ("ask Claude Code, why is the build slow", "why is the build slow"),
+        # What the recogniser really wrote on the desktop PC:
+        (
+            "Friday, ask plot code to list the files on this project.",
+            "list the files on this project.",
+        ),
+        (
+            "Friday, asked long code to list the files in this project.",
+            "list the files in this project.",
+        ),
+        (
+            "Friday, Ask Plot Code to list the files in this project.",
+            "list the files in this project.",
+        ),
     ],
 )
 def test_trigger_phrases_survive_speech_recognition(said: str, task: str) -> None:
@@ -85,7 +98,15 @@ def test_trigger_phrases_survive_speech_recognition(said: str, task: str) -> Non
 
 @pytest.mark.parametrize(
     "said",
-    ["I love Claude Code.", "What is Claude Code?", "Ask me anything.", "The cloud is grey."],
+    [
+        "I love Claude Code.",
+        "What is Claude Code?",
+        "Ask me anything.",
+        "The cloud is grey.",
+        "Ask the code to explain itself.",
+        "I asked about source code yesterday.",
+        "Tell me how this code works.",
+    ],
 )
 def test_ordinary_sentences_are_not_tasks(said: str) -> None:
     assert parse_task(said) is None
@@ -336,3 +357,29 @@ async def test_saying_the_command_again_replaces_the_waiting_task() -> None:
     # without a waiting task the loose wording is ordinary conversation
     delegate.pending = None
     assert await ask(engine, "As Claude Code said, it is fine.") == "Sure."
+
+
+async def test_no_followed_by_the_name_is_a_no() -> None:
+    agent = FakeAgent()
+    delegate, engine, provider, notices = setup(agent)
+
+    await ask(engine, "Friday, ask Cloud Code to list the files in this project.")
+    assert await ask(engine, "No, cloud code.") == "Okay, I won't send it."
+    assert delegate.pending is None and agent.calls == []
+
+
+async def test_without_a_coding_agent_she_says_so_in_fixed_words() -> None:
+    """Left to a small model, this got "I'm running that now" and made-up files."""
+    provider = FakeProvider("fake", reply="I'm running that now. There's a main.py file.")
+    engine = ConversationEngine(
+        ProviderRouter({"fake": provider}, {"default": ["fake"]}), channel=Channel.VOICE
+    )
+    said = "Friday, ask Cloud Code to list the files in this project."
+    assert engine.is_control(said)
+    reply = await ask(engine, said)
+    assert "isn't switched on" in reply and "nothing ran" in reply
+    assert provider.requests == []  # the model was never asked
+    assert not engine.window.messages  # control, not conversation
+
+    await ask(engine, "What is a rainbow?")
+    assert "cannot run Claude Code" in provider.requests[0].system

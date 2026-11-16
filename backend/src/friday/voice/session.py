@@ -583,6 +583,18 @@ class VoiceSession:
                 piece = f"{piece} {pending.pop(0)}"
             return piece
 
+        def spare() -> float:
+            """Seconds the next piece can still wait for more sentences
+            without her running out of things to say. 0: synthesise now."""
+            if started_at is None or finished:
+                return 0.0
+            waiting = sum(len(p) + 1 for p in pending)
+            if waiting >= self.config.max_chunk_chars:
+                return 0.0
+            ahead = produced_s - (loop.time() - started_at)
+            needed = waiting / _CHARS_PER_S * pace + _JOIN_MARGIN_S
+            return max(0.0, ahead - needed)
+
         async def speak(piece: str, last: bool) -> None:
             nonlocal first, produced_s, started_at, pace
             cleaned = sanitizer.clean(piece)
@@ -612,6 +624,15 @@ class VoiceSession:
                         break
                     more.clear()
                     await more.wait()
+                    continue
+                wait = spare()
+                if wait > 0:
+                    # She is still speaking the last piece and the reply is
+                    # still being written: let more sentences arrive, so they
+                    # are voiced together as one flowing piece, not one by one.
+                    more.clear()
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(more.wait(), wait)
                     continue
                 piece = take()
                 await speak(piece, last=finished and not pending)
@@ -646,6 +667,9 @@ class VoiceSession:
 
 
 _CHARS_PER_S = 14.0  # spoken English, roughly
+# How long before the queued audio runs out the next piece must be started,
+# on top of the time it takes to synthesise.
+_JOIN_MARGIN_S = 0.35
 
 
 def _with_pause(audio: AudioChunk, pause_ms: float) -> AudioChunk:

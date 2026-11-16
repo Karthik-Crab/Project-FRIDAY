@@ -64,9 +64,25 @@ class OllamaProvider:
         except httpx.HTTPError:
             return False
 
-    async def warm_up(self) -> None:
-        """Load the model into memory now instead of on the first question."""
-        payload = {"model": self._info.model, "messages": [], "keep_alive": self._keep_alive}
+    async def warm_up(self, system: str | None = None) -> None:
+        """Load the model into memory now instead of on the first question.
+
+        With ``system`` the model also reads the system prompt now. Ollama
+        keeps what it has read, so the first real turn only has to read the
+        user's words; on a CPU, reading a long prompt takes several seconds.
+        """
+        payload: dict[str, object] = {
+            "model": self._info.model,
+            "messages": [],
+            "keep_alive": self._keep_alive,
+        }
+        if system:
+            payload["messages"] = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "Hi"},
+            ]
+            payload["stream"] = False
+            payload["options"] = {"num_predict": 1}
         try:
             await self._client.post("/api/chat", json=payload)
         except httpx.HTTPError:

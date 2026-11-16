@@ -28,11 +28,15 @@ log = logging.getLogger(__name__)
 
 # Speech recognisers write "Claude Code" in many ways.
 _NAME = r"(?:claude|claud|cloud|clod|clawed|claudia)(?:[\s-]*(?:code|coat|coda|cold))?"
+# Further off still ("plot code", "long code"): any one word before "code".
+# Only accepted in the plainest form of the command, "ask ... code to ...".
+_ANY_NAME = r"(?!(?:the|this|that|my|your|our|some|a|an|for|about)\b)[a-z]+[\s-]+code"
 _SEP = r"[\s,.:;!?-]+"
 _LEAD = rf"^\W*(?:(?:hey|ok|okay){_SEP})?(?:friday{_SEP})?(?:please{_SEP})?"
 _DELEGATE = re.compile(
     rf"{_LEAD}(?:(?:can|could|would){_SEP}you{_SEP})?(?:please{_SEP})?"
     rf"(?:(?:ask|tell|get|have){_SEP}{_NAME}"
+    rf"|(?:ask|asked|tell){_SEP}{_ANY_NAME}(?={_SEP}to\b)"
     rf"|(?:send|pass|give|forward){_SEP}(?:(?:this|that|it){_SEP})?(?:on{_SEP})?to{_SEP}{_NAME})"
     rf"{_SEP}(?:to{_SEP})?(?P<task>\S.*)$",
     re.IGNORECASE | re.DOTALL,
@@ -51,6 +55,8 @@ _AGAIN = re.compile(
     rf"{_LEAD}(?:(?:no|now|so){_SEP})?(?:ask|as|asked|us){_SEP}{_NAME}{_SEP}(?:to{_SEP})?(?P<task>\S.*)$",
     re.IGNORECASE | re.DOTALL,
 )
+# "No, Claude Code." after the read-back: a no, not more of the task.
+_NO_NAME = re.compile(rf"^\W*(?:no|nope|nah){_SEP}(?:not{_SEP})?{_NAME}\W*$", re.IGNORECASE)
 _YES = re.compile(
     r"^(?:yes|yeah|yep|yup|sure|correct|right|okay|ok|confirm|confirmed|send it|go ahead|"
     r"do it|go|that s right|that s it|yes please|yes send it|please do)$"
@@ -68,6 +74,23 @@ def _plain(text: str) -> str:
 def parse_task(text: str) -> str | None:
     match = _DELEGATE.match(text.strip())
     return match.group("task").strip() if match else None
+
+
+def is_agent_command(text: str) -> bool:
+    """Is this one of the fixed coding-agent commands (send, cancel, new chat)?"""
+    return parse_task(text) is not None or bool(_CANCEL.match(text) or _FRESH.match(text))
+
+
+def not_set_up_reply(name: str = "Claude Code") -> str:
+    """What FRIDAY says to such a command when no coding agent is switched on.
+
+    Fixed wording, so a small model is never left to answer it: one did, and
+    said it was running the task and described files that do not exist.
+    """
+    return (
+        f"I can't pass that on yet. {name} isn't switched on for me on this "
+        "computer, so nothing was sent and nothing ran."
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,11 +140,7 @@ class CodeDelegate:
 
     def concerns(self, text: str) -> bool:
         """Would ``handle`` answer this itself (rather than the language model)?"""
-        return (
-            self.pending is not None
-            or parse_task(text) is not None
-            or bool(_CANCEL.match(text) or _FRESH.match(text))
-        )
+        return self.pending is not None or is_agent_command(text)
 
     def dismiss(self) -> None:
         """The user said "stop": nothing is waiting to be sent any more."""
@@ -156,7 +175,7 @@ class CodeDelegate:
             task, self.pending = self.pending, None
             self._job = asyncio.get_running_loop().create_task(self._run(task))
             return f"Sent. I'll tell you when {self.name} is done."
-        if _NO.match(plain):
+        if _NO.match(plain) or _NO_NAME.match(text):
             self.pending = None
             return "Okay, I won't send it."
         again = _AGAIN.match(text)

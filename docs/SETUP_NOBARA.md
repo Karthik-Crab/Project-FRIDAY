@@ -11,6 +11,37 @@ PC. Work through the stages in order. Each stage ends with a check; do not start
 the next stage until it passes. If a check fails, stop, diagnose, and record what
 happened in the report rather than skipping ahead.
 
+## Where things stand (read this first)
+
+A first run did stages 1 to 7 on commit `5403dc9` and stopped there. Its report
+listed seven findings. Four were faults in the code and are fixed; `git pull`
+brings the fixes:
+
+- **Invented Claude Code run.** With passing tasks on switched off, "ask Claude
+  Code to ..." is now answered in fixed words ("... isn't switched on ...,
+  nothing ran"). The talking model is not asked. "No, Claude Code." after a
+  read-back is a no.
+- **"Claude Code" not recognised.** It is now always a vocabulary hint, in
+  `friday listen` too, and "ask plot code to ..." / "asked long code to ..." are
+  accepted as the command.
+- **Sentences one by one.** While she is still speaking, the next sentences are
+  now collected and voiced together as one piece.
+- **Slow first turn.** It was not the model being unloaded: on a CPU the model
+  needs several seconds to read FRIDAY's long instructions the first time. It
+  now reads them during `Loading speech models...`.
+
+One finding is about equipment, not code: the Bluetooth earbuds. Stage 6 below
+has a new section about it. **Sort that out first; it decides how everything
+else sounds.**
+
+What to do now, in this order:
+
+1. Stage 7R (re-test after the fixes), including the microphone part of stage 6.
+2. Stage 7S (disk space).
+3. Stage 9 (models drive), then stage 15 (the expressive voice). This is the
+   part the owner cares about most, so it comes before the rest.
+4. Stage 8, then stages 10 to 14, as far as the SSD allows (stage 7S).
+
 ## Context
 
 - Machine: Intel i5 13th gen, 32 GB RAM, NVIDIA RTX 3060 Ti with 8 GB of video
@@ -119,7 +150,7 @@ If the clone asks for a login, the repository is private: let the owner sign in.
 pytest -q
 ```
 
-**Check 2:** all tests pass (132 before the expressive voice was added, 139 after).
+**Check 2:** all tests pass (148 at the time of writing).
 
 ## Stage 3: the talking model, on the CPU
 
@@ -226,8 +257,43 @@ of error page.
 
 ## Stage 6: microphone and speaker (owner must be present)
 
-The owner should use a **headset or earphones**. There is no echo cancellation
-yet, so through loudspeakers FRIDAY hears her own voice and cuts herself off.
+There is no echo cancellation yet, so through loudspeakers FRIDAY hears her own
+voice and cuts herself off. The owner needs earphones, and **the microphone
+must not be a Bluetooth one.**
+
+### Bluetooth earbuds: use them for listening only
+
+The first run used Bluetooth earbuds (soundcore C50i) for both directions. As
+soon as a program opens a Bluetooth microphone, the earbuds switch from music
+quality (A2DP) to telephone quality (HFP: 16 kHz, mono) **for the sound as
+well**. That is why her voice sounded bad and why so much was misheard. Open-ear
+earbuds also let her voice leak into their own microphone, which produced `you>`
+lines nobody said.
+
+Any one of these fixes it. The owner chooses:
+
+- **Wired earphones with a microphone** (the cheap kind that comes with a
+  phone). A desktop PC with separate pink and green sockets needs a small
+  headset splitter cable.
+- **A USB headset.**
+- **Keep the earbuds for listening and use any other microphone**: a USB
+  microphone or a webcam's microphone. The earbuds then stay in music quality.
+
+For the third option, lock the earbuds to music quality so nothing switches them
+back: KDE System Settings, Sound, the earbuds' **Profile**: choose
+"High Fidelity Playback (A2DP Sink)". Then choose the other microphone as the
+input device in the same window. Check it:
+
+```bash
+pactl list cards | grep -E "Name:|Active Profile:"
+```
+
+The earbuds' card must show an `a2dp` profile, and must still show it while
+`friday mic` is running in another terminal.
+
+If none of these is possible today, carry on with what there is, and write in
+the report which microphone and which profile were used. Results with the
+earbuds' own microphone say little about FRIDAY.
 
 ```bash
 python -m sounddevice
@@ -270,10 +336,6 @@ and at least four of five sentences are heard correctly with one of the two
 models. If `small.en` is more accurate and its times (the `ms` figure on each
 line) stay under about 700 ms, set `stt_model = "small.en"` in the config.
 
-If a Bluetooth headset is used as the microphone and recognition is poor, say so
-in the report: Bluetooth microphones switch to a telephone-quality mode. Try a
-wired or USB microphone if one is available.
-
 ## Stage 7: live voice (owner must be present)
 
 ```bash
@@ -295,6 +357,95 @@ timing line after each turn.
 - **V5. Heard correctly.** Compare each `you>` line with what the owner said.
 
 **Check 7:** a full conversation with no `[error: ...]` lines and no traceback.
+
+## Stage 7R: re-test after the fixes (owner must be present)
+
+Only needed if stages 1 to 7 were done on `5403dc9` or earlier.
+
+```bash
+cd ~/local-ai/Project-FRIDAY
+git pull
+cd backend
+source .venv/bin/activate
+pip install -e ".[dev,secrets,voice]"
+pytest
+```
+
+**Check 7R-a:** 148 passed.
+
+Set up the microphone as described in stage 6 ("Bluetooth earbuds"). Then, with
+no program using a microphone, play the Kokoro sample made in the first run
+through the earbuds, so the owner hears the built-in voice at full quality. Note
+their verdict. This separates "the voice is bad" from "the Bluetooth link was
+bad".
+
+```bash
+friday mic
+```
+
+```bash
+friday listen
+```
+
+The owner reads the five sentences of stage 6 again.
+
+**Check 7R-b:** at least four of five are right, and sentence 3 contains
+"Claude Code".
+
+```bash
+friday voice
+```
+
+One session of 10 turns or more, full terminal output into the report:
+
+- **R1. First turn.** The first-audio time of the very first turn. Expected:
+  about the same as later turns (2 to 3 s), not 9 s.
+- **R2. Flow.** "Explain how a rainbow forms, in detail." Count the `friday>`
+  lines of the answer. Expected: the first sentence alone, then two or three
+  longer pieces, not one line per sentence. Does it sound like one person
+  talking now? Any gap where she stops and waits?
+- **R3. Claude Code, not set up.** "Friday, ask Claude Code to list the files in
+  this project." Expected, word for word: "I can't pass that on yet. Claude Code
+  isn't switched on for me on this computer, so nothing was sent and nothing
+  ran." She must not claim to run anything.
+- **R4. Phantom lines.** Any `you>` line the owner did not say? Copy each one.
+- **R5. Heard correctly.** Compare each `you>` line with what was said.
+- **R6. Ctrl+C in `friday chat`** quits at once, with no error text.
+
+**Check 7R-c:** R1 to R3 as expected, no `[error: ...]` lines, no traceback.
+
+## Stage 7S: disk space on the SSD
+
+The first run found about 25 GB free on the SSD. Rough needs **on the SSD**
+(model files go to the drive, these are the programs themselves):
+
+| What | Stage | About |
+|---|---|---|
+| Chatterbox Python environment | 15 | 7 GB |
+| `llama3.1:8b` in Ollama | 8 | 5 GB |
+| ComfyUI with its Python environment | 12 | 10 GB |
+| LM Studio program | 11 | 1 GB |
+
+That is about 23 GB, which does not leave a safe margin. So:
+
+1. Before each stage, run `df -h /` and write the figure in the report.
+2. After stage 9, keep pip's download cache on the drive, and empty the old one:
+
+```bash
+mkdir -p /mnt/ai-hdd/pip-cache
+echo 'export PIP_CACHE_DIR=/mnt/ai-hdd/pip-cache' >> ~/.bashrc
+pip cache purge
+```
+
+3. Do the stages in the order given at the top: 9, 15, 8, then 10 to 14.
+4. **Do not start a stage that would leave less than 8 GB free on the SSD.**
+   Stop there and report. Making the Linux partition bigger (the Windows
+   partition has 181 GB free) is the owner's decision and is not part of this
+   brief. Do not resize, move or delete partitions.
+5. Do not move the Ollama models or a Python environment to the NTFS drive.
+
+**Check 7S:** the free-space figure is recorded, and the pip cache is on the
+drive (after stage 9).
 
 ## Stage 8: a faster talking model on the graphics card
 
@@ -622,7 +773,7 @@ pip install -e ".[dev,secrets,voice]"
 pytest -q
 ```
 
-**Check 15a:** 139 passed.
+**Check 15a:** 148 passed.
 
 Chatterbox was developed on Python 3.11. Its environment is about 6 to 8 GB
 (PyTorch with the NVIDIA libraries), and it has to live on the SSD. Check the
@@ -791,7 +942,10 @@ Write `backend/SETUP_REPORT.md` (do not commit it) with:
     service; the three timings (and the CPU timings if tried); which talking
     model shares the card with it; V6 and V7 in the owner's words; whether
     `tts_server_url` is left in the config.
-12. Anything that had to be done differently from this file.
+12. Stage 7R: which microphone and earbud profile were used; the owner's
+    verdict on the Kokoro sample at full quality; R1 to R6. Stage 7S: free
+    space on the SSD before each stage.
+13. Anything that had to be done differently from this file.
 
 Before saving the report, check that it and `backend/handoff/` contain no keys
 or tokens.

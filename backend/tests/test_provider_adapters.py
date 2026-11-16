@@ -60,10 +60,19 @@ async def test_ollama_warm_up_loads_the_model_without_a_prompt() -> None:
     await OllamaProvider("local", "llama", client=client(handler, "http://x")).warm_up()
     assert seen["body"] == {"model": "llama", "messages": [], "keep_alive": "30m"}
 
+    # With the system prompt, the model reads it now, so the first real turn
+    # does not spend seconds on it.
+    await OllamaProvider("local", "llama", client=client(handler, "http://x")).warm_up("be nice")
+    assert seen["body"]["messages"][0] == {"role": "system", "content": "be nice"}
+    assert seen["body"]["stream"] is False
+    assert seen["body"]["options"] == {"num_predict": 1}  # read it, say next to nothing
+    assert seen["body"]["keep_alive"] == "30m"
+
     def refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("down")
 
     await OllamaProvider("local", "llama", client=client(refuse, "http://x")).warm_up()
+    await OllamaProvider("local", "llama", client=client(refuse, "http://x")).warm_up("be nice")
 
 
 async def test_openai_request_and_stream() -> None:
