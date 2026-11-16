@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any, ClassVar
 
 import numpy as np
 import pytest
@@ -185,19 +186,41 @@ def test_pcm_roundtrip_helpers() -> None:
     assert abs(pcm16_to_float32(pcm)[0] - 0.25) < 1e-3
 
 
-async def test_whisper_adapter_drops_low_confidence_noise_segments() -> None:
-    class Noisy:
+async def test_whisper_adapter_drops_noise_but_never_part_of_a_sentence() -> None:
+    def seg(text: str, no_speech: float, logprob: float):  # type: ignore[no-untyped-def]
+        return type("S", (), {"text": text, "no_speech_prob": no_speech, "avg_logprob": logprob})()
+
+    class Scored:
+        def __init__(self, *segments: object) -> None:
+            self.segments = segments
+
         def transcribe(self, audio, **kwargs):  # type: ignore[no-untyped-def]
-            def seg(text: str, no_speech: float, logprob: float):  # type: ignore[no-untyped-def]
-                return type(
-                    "S", (), {"text": text, "no_speech_prob": no_speech, "avg_logprob": logprob}
-                )()
+            return iter(self.segments), type("I", (), {"language": "en"})()
 
-            segments = [seg(" Thank you.", 0.9, -1.4), seg(" Open the report.", 0.1, -0.3)]
-            return iter(segments), type("I", (), {"language": "en"})()
+    noise_only = Scored(seg(" Thank you.", 0.9, -1.4))
+    assert (await FasterWhisperSTT(model=noise_only).transcribe(tone(100), 16_000)).text == ""
 
-    result = await FasterWhisperSTT(model=Noisy()).transcribe(tone(100), 16_000)
-    assert result.text == "Open the report."
+    # A poor microphone makes the start of a real sentence look doubtful.
+    # Losing it changes what was asked, so the sentence is kept whole.
+    sentence = Scored(
+        seg(" Friday, ask Claude Code", 0.9, -1.2),
+        seg(" to list the files in this project.", 0.9, -0.4),
+    )
+    result = await FasterWhisperSTT(model=sentence).transcribe(tone(100), 16_000)
+    assert result.text == "Friday, ask Claude Code to list the files in this project."
+
+
+def test_too_many_words_for_the_length_of_the_sound_is_noise() -> None:
+    from friday.voice.control import is_implausible
+
+    assert is_implausible("Good night.", 300)  # seen on the owner's microphone
+    assert is_implausible("All right.", 400)
+    assert is_implausible("Thank you.", 250)
+    for word in ("Yes.", "No", "Stop!", "Okay.", "Friday"):
+        assert not is_implausible(word, 250), word
+    assert not is_implausible("Go ahead.", 500)
+    assert not is_implausible("Tell me something interesting about octopuses.", 2000)
+    assert not is_implausible("", 100)
 
 
 async def test_whisper_adapter_passes_vocabulary_as_prompt_and_warms_up() -> None:
@@ -292,7 +315,19 @@ async def test_listen_prints_what_was_heard_and_nothing_else() -> None:
     )
     assert len(lines) == 2
     assert lines[0].startswith("heard> Explain how a rainbow works.")
+    assert "s of speech in" in lines[0]
     assert lines[1].startswith("heard> (nothing)")
+
+    lines.clear()
+    await listen_loop(
+        ScriptedAudioSource([Silence(300), Speak(300), Silence(900)]),
+        EnergyVAD(),
+        ScriptedSTT(["Good night."]),
+        0.5,
+        700,
+        show=lines.append,
+    )
+    assert lines[0].startswith("heard> (ignored as noise: Good night.)")
 
 
 # ---- expressive voice ------------------------------------------------------
@@ -323,11 +358,8 @@ def test_the_prompt_names_the_marks_only_when_the_voice_has_them() -> None:
     assert "[laugh]" not in expressive.system_prompt(Mode.COMPANION, Channel.TEXT)
 
 
-def _voice_service(fail: bool = False) -> tuple[object, list[str]]:
-    """The real HTTP handler from servers/chatterbox_server.py with a stand-in model."""
+def _voice_server_module() -> Any:
     import importlib.util
-    import threading
-    from http.server import ThreadingHTTPServer
     from pathlib import Path
 
     path = Path(__file__).parent.parent / "servers" / "chatterbox_server.py"
@@ -335,6 +367,146 @@ def _voice_service(fail: bool = False) -> tuple[object, list[str]]:
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+class _Wav:
+    """What Chatterbox hands back: a torch tensor, as far as the service uses it."""
+
+    def __init__(self, samples: Any) -> None:
+        self._samples = samples
+
+    def squeeze(self) -> "_Wav":
+        return self
+
+    def detach(self) -> "_Wav":
+        return self
+
+    def cpu(self) -> "_Wav":
+        return self
+
+    def numpy(self) -> Any:
+        return self._samples
+
+
+class _Turbo:
+    """Same call signatures as ChatterboxTurboTTS in chatterbox-tts 0.1.7.
+
+    Copied from the released package on purpose: a stand-in that accepts
+    anything is how a made-up ``nano`` option once passed every test.
+    """
+
+    sr = 24_000
+    built_in_voice = True
+    loaded_on: ClassVar[list[str]] = []
+    prepared: ClassVar[list[str]] = []
+    spoken: ClassVar[list[tuple[str, str | None]]] = []
+
+    def __init__(self) -> None:
+        self.conds: object | None = object() if self.built_in_voice else None
+
+    @classmethod
+    def from_pretrained(cls, device) -> "_Turbo":  # type: ignore[no-untyped-def]
+        cls.loaded_on.append(device)
+        return cls()
+
+    def prepare_conditionals(  # type: ignore[no-untyped-def]
+        self, wav_fpath, exaggeration=0.5, norm_loudness=True
+    ) -> None:
+        self.prepared.append(wav_fpath)
+        self.conds = object()
+
+    def generate(  # type: ignore[no-untyped-def]
+        self,
+        text,
+        repetition_penalty=1.2,
+        min_p=0.0,
+        top_p=0.95,
+        audio_prompt_path=None,
+        exaggeration=0.0,
+        cfg_weight=0.0,
+        temperature=0.8,
+        top_k=1000,
+        norm_loudness=True,
+    ) -> _Wav:
+        assert self.conds is not None or audio_prompt_path
+        self.spoken.append((text, audio_prompt_path))
+        return _Wav(np.array([[0.0, 0.5, -2.0]], dtype=np.float32))
+
+
+@pytest.fixture
+def turbo(monkeypatch: pytest.MonkeyPatch) -> type[_Turbo]:
+    import sys
+    import types
+
+    class Turbo(_Turbo):
+        loaded_on: ClassVar[list[str]] = []
+        prepared: ClassVar[list[str]] = []
+        spoken: ClassVar[list[tuple[str, str | None]]] = []
+
+    package = types.ModuleType("chatterbox")
+    module = types.ModuleType("chatterbox.tts_turbo")
+    module.ChatterboxTurboTTS = Turbo  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "chatterbox", package)
+    monkeypatch.setitem(sys.modules, "chatterbox.tts_turbo", module)
+    return Turbo
+
+
+def test_voice_service_loads_chatterbox_the_way_the_package_expects(
+    turbo: type[_Turbo],
+) -> None:
+    voice = _voice_server_module().ChatterboxVoice("cuda", None)
+    assert turbo.loaded_on == ["cuda"]
+    assert (voice.name, voice.device, voice.sample_rate) == ("chatterbox-turbo", "cuda", 24_000)
+
+    pcm = voice.speak("Hello there.")
+    assert turbo.spoken == [("Hello there.", None)]
+    assert np.frombuffer(pcm, dtype="<i2").tolist() == [0, 16383, -32767]  # clipped, 16-bit
+
+
+def test_voice_service_works_out_a_reference_voice_once(turbo: type[_Turbo]) -> None:
+    voice = _voice_server_module().ChatterboxVoice("cpu", "/voices/mine.wav")
+    voice.speak("One.")
+    voice.speak("Two.")
+    assert turbo.prepared == ["/voices/mine.wav"]
+    assert turbo.spoken == [("One.", None), ("Two.", None)]
+
+
+def test_voice_service_stops_clearly_when_the_model_has_no_voice(turbo: type[_Turbo]) -> None:
+    turbo.built_in_voice = False
+    with pytest.raises(SystemExit, match="--voice"):
+        _voice_server_module().ChatterboxVoice("cuda", None)
+
+
+def test_voice_service_start_up_options(
+    turbo: type[_Turbo], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _voice_server_module()
+
+    class Stopped:
+        def __init__(self, address: tuple[str, int], handler: object) -> None:
+            assert address == ("127.0.0.1", 5005)  # this machine only
+
+        def serve_forever(self) -> None:
+            raise KeyboardInterrupt
+
+        def server_close(self) -> None:
+            pass
+
+    monkeypatch.setattr(module, "ThreadingHTTPServer", Stopped)
+    assert module.main(["--device", "cpu"]) == 0
+    assert turbo.loaded_on == ["cpu"]
+    assert turbo.spoken == [("Ready.", None)]
+    with pytest.raises(SystemExit):
+        module.main(["--device", "cpu", "--nano"])  # never existed in Chatterbox
+
+
+def _voice_service(fail: bool = False) -> tuple[object, list[str]]:
+    """The real HTTP handler from servers/chatterbox_server.py with a stand-in model."""
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    module = _voice_server_module()
     said: list[str] = []
 
     class StandIn:

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from dataclasses import replace
 
 import httpx
 
 from friday.core.errors import ProviderError
-from friday.core.messages import ChatRequest
+from friday.core.messages import ChatRequest, Message, Role
 from friday.llm.base import ProviderInfo
 from friday.llm.providers._http import DEFAULT_TIMEOUT, iter_ndjson, raise_for_status
 
@@ -64,28 +65,33 @@ class OllamaProvider:
         except httpx.HTTPError:
             return False
 
-    async def warm_up(self, system: str | None = None) -> None:
+    async def warm_up(self, request: ChatRequest | None = None) -> None:
         """Load the model into memory now instead of on the first question.
 
-        With ``system`` the model also reads the system prompt now. Ollama
+        With ``request`` the model also reads the system prompt now. Ollama
         keeps what it has read, so the first real turn only has to read the
         user's words; on a CPU, reading a long prompt takes several seconds.
+        The request goes down the same path as a real turn, with the same
+        options, and is dropped at the first word of the answer: anything
+        that differs from a real turn risks Ollama starting again from nothing.
         """
-        payload: dict[str, object] = {
-            "model": self._info.model,
-            "messages": [],
-            "keep_alive": self._keep_alive,
-        }
-        if system:
-            payload["messages"] = [
-                {"role": "system", "content": system},
-                {"role": "user", "content": "Hi"},
-            ]
-            payload["stream"] = False
-            payload["options"] = {"num_predict": 1}
         try:
-            await self._client.post("/api/chat", json=payload)
-        except httpx.HTTPError:
+            if request is None:
+                payload = {
+                    "model": self._info.model,
+                    "messages": [],
+                    "keep_alive": self._keep_alive,
+                }
+                await self._client.post("/api/chat", json=payload)
+                return
+            primer = replace(request, messages=(Message(Role.USER, "Hi"),))
+            stream = self.stream(primer)
+            try:
+                async for _ in stream:
+                    break
+            finally:
+                await stream.aclose()
+        except (httpx.HTTPError, ProviderError):
             pass  # best effort; a real request will report the problem
 
     async def aclose(self) -> None:

@@ -29,6 +29,7 @@ from friday.conversation.engine import ConversationEngine
 from friday.conversation.notes import NoteBook
 from friday.core.errors import ConfigError, FridayError
 from friday.core.logging import configure_logging
+from friday.core.messages import ChatRequest
 from friday.core.secrets import KeyringEnvSecretStore
 from friday.llm.factory import build_router
 from friday.llm.router import ProviderRouter
@@ -187,7 +188,7 @@ def _print_voice_event(event: object) -> None:
             + (f"ack {m.ack_ms:.0f} ms | " if m.ack_ms is not None else "")
             + f"first token {m.first_token_ms or 0:.0f} ms | "
             f"first audio {m.first_audio_ms or 0:.0f} ms | endpoint {m.endpoint_ms:.0f} ms | "
-            f"{m.provider}]"
+            f"{m.provider or 'fixed reply'}]"  # no model was asked
         )
     elif isinstance(event, vs.VoiceErrorEvent):
         print(f"  [error: {event.message}]")
@@ -202,13 +203,19 @@ def _print_voice_change(expressive: bool) -> None:
         print("  [expressive voice not available; using the built-in voice]")
 
 
-async def _warm_up_local(router: ProviderRouter, system: str | None = None) -> None:
+async def _warm_up_local(router: ProviderRouter, request: ChatRequest | None = None) -> None:
     """Load local models, and let them read the system prompt, before the
     first question rather than during it."""
+    loop = asyncio.get_running_loop()
     for provider in router.providers.values():
         warm_up = getattr(provider, "warm_up", None)
         if provider.info.local and warm_up is not None:
-            await warm_up(system)
+            begun = loop.time()
+            await warm_up(request)
+            if request is not None:
+                # Shown so a slow first turn can be told apart from a slow start.
+                took = loop.time() - begun
+                print(f"  [{provider.info.name}: read its instructions in {took:.1f} s]")
 
 
 async def _mic(config: FridayConfig, seconds: float) -> None:
@@ -282,6 +289,7 @@ async def listen_loop(
     end_silence_ms: float,
     show: Callable[[str], None] = print,
 ) -> None:
+    from friday.voice.control import is_implausible
     from friday.voice.segmenter import SegmenterConfig, UtteranceEnded, UtteranceSegmenter
 
     segmenter = UtteranceSegmenter(SegmenterConfig(end_silence_ms=end_silence_ms))
@@ -291,8 +299,14 @@ async def listen_loop(
         begun = loop.time()
         text = (await stt.transcribe(event.pcm, event.sample_rate)).text
         took = (loop.time() - begun) * 1000
-        length = event.speech_ms / 1000
-        show(f"heard> {text or '(nothing)'}   [{length:.1f} s of speech, {took:.0f} ms]")
+        speech = event.speech_ms / 1000
+        audio = len(event.pcm) / 2 / event.sample_rate
+        if is_implausible(text, event.speech_ms):
+            text = f"(ignored as noise: {text})"
+        show(
+            f"heard> {text or '(nothing)'}   "
+            f"[{speech:.1f} s of speech in {audio:.1f} s of sound, {took:.0f} ms]"
+        )
 
     async for frame in source.frames():
         for event in segmenter.process(frame, vad.speech_probability(frame) >= threshold):
@@ -431,7 +445,7 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
                 # Tell the model which sounds this voice can make. This is part
                 # of the system prompt, so it is settled before the model reads it.
                 engine.persona = replace(engine.persona, expression_tags=voice.expression_tags)
-            await _warm_up_local(router, engine.build_request().system)
+            await _warm_up_local(router, engine.build_request())
 
         await asyncio.gather(whisper.warm_up(), warm_voice_and_model())
         if isinstance(voice, FallbackTTS):

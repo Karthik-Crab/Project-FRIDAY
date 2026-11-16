@@ -60,19 +60,39 @@ async def test_ollama_warm_up_loads_the_model_without_a_prompt() -> None:
     await OllamaProvider("local", "llama", client=client(handler, "http://x")).warm_up()
     assert seen["body"] == {"model": "llama", "messages": [], "keep_alive": "30m"}
 
-    # With the system prompt, the model reads it now, so the first real turn
-    # does not spend seconds on it.
-    await OllamaProvider("local", "llama", client=client(handler, "http://x")).warm_up("be nice")
-    assert seen["body"]["messages"][0] == {"role": "system", "content": "be nice"}
-    assert seen["body"]["stream"] is False
-    assert seen["body"]["options"] == {"num_predict": 1}  # read it, say next to nothing
-    assert seen["body"]["keep_alive"] == "30m"
+    # With a request, the model reads the system prompt now, so the first real
+    # turn does not spend seconds on it. Apart from the user's words, what is
+    # sent must be exactly what a real turn sends.
+    real = ChatRequest(
+        system="be nice",
+        messages=(Message(Role.USER, "Explain rainbows."),),
+        max_tokens=400,
+        temperature=0.8,
+    )
+    bodies: list[dict[str, object]] = []
+
+    def chat(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        lines = [{"message": {"content": "Hi"}}, {"done": True}]
+        return httpx.Response(200, content="\n".join(json.dumps(x) for x in lines))
+
+    provider = OllamaProvider("local", "llama", client=client(chat, "http://x"))
+    await provider.warm_up(real)
+    assert [d async for d in provider.stream(real)] == ["Hi"]
+    primer, turn = bodies
+    assert primer["messages"] == [
+        {"role": "system", "content": "be nice"},
+        {"role": "user", "content": "Hi"},
+    ]
+    assert {k: v for k, v in primer.items() if k != "messages"} == {
+        k: v for k, v in turn.items() if k != "messages"
+    }
 
     def refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("down")
 
     await OllamaProvider("local", "llama", client=client(refuse, "http://x")).warm_up()
-    await OllamaProvider("local", "llama", client=client(refuse, "http://x")).warm_up("be nice")
+    await OllamaProvider("local", "llama", client=client(refuse, "http://x")).warm_up(real)
 
 
 async def test_openai_request_and_stream() -> None:

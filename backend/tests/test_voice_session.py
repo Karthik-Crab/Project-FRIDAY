@@ -575,3 +575,15 @@ def test_a_pause_is_added_after_a_piece() -> None:
     assert padded.duration_s == pytest.approx(1.25)
     assert padded.pcm.endswith(b"\x00\x00" * 4000)
     assert vs._with_pause(audio, 0) is audio
+
+
+async def test_a_click_that_whisper_made_words_of_is_ignored() -> None:
+    # 300 ms of sound cannot hold "Good night." It is noise, so no turn starts.
+    session, engine, provider, _, tts, events = build(
+        [Silence(300), Speak(300), Silence(900), Speak(300), Silence(900)],
+        ["Good night.", "Yes."],
+        reply="Good.",
+    )
+    await session.run()
+    assert [e.text for e in of(events, vs.UserSaid)] == ["Yes."]
+    assert len(provider.requests) == 1

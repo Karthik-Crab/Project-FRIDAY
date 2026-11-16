@@ -31,6 +31,21 @@ def is_filler(text: str) -> bool:
     return bool(_FILLER.match(_normalise(text)))
 
 
+# Whisper turns a click or a cough into a tidy phrase ("Good night.",
+# "All right."). Nobody says two words in a third of a second, so the length of
+# the sound gives it away. Single words ("yes", "stop") are always possible.
+_SHORT_MS = 600.0
+_MS_PER_WORD = 250.0
+
+
+def is_implausible(text: str, speech_ms: float) -> bool:
+    """True when ``text`` has more words than ``speech_ms`` of sound could hold."""
+    if speech_ms >= _SHORT_MS:
+        return False
+    words = len(_normalise(text).split())
+    return words > max(1, int(speech_ms // _MS_PER_WORD))
+
+
 class ControlIntent(Enum):
     STOP = "stop"
     BACKCHANNEL = "backchannel"

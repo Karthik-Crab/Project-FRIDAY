@@ -13,34 +13,44 @@ happened in the report rather than skipping ahead.
 
 ## Where things stand (read this first)
 
-A first run did stages 1 to 7 on commit `5403dc9` and stopped there. Its report
-listed seven findings. Four were faults in the code and are fixed; `git pull`
-brings the fixes:
+Two runs are done. Stages 1 to 7, 7R and 7S are finished, and the Chatterbox
+environment exists (`~/local-ai/chatterbox-venv`, stage 15 up to check 15a).
+The second run stopped at check 15b and reported these; `git pull` brings the
+fixes:
 
-- **Invented Claude Code run.** With passing tasks on switched off, "ask Claude
-  Code to ..." is now answered in fixed words ("... isn't switched on ...,
-  nothing ran"). The talking model is not asked. "No, Claude Code." after a
-  read-back is a no.
-- **"Claude Code" not recognised.** It is now always a vocabulary hint, in
-  `friday listen` too, and "ask plot code to ..." / "asked long code to ..." are
-  accepted as the command.
-- **Sentences one by one.** While she is still speaking, the next sentences are
-  now collected and voiced together as one piece.
-- **Slow first turn.** It was not the model being unloaded: on a CPU the model
-  needs several seconds to read FRIDAY's long instructions the first time. It
-  now reads them during `Loading speech models...`.
+- **C1, the voice service crashed on start-up.** FRIDAY's code asked Chatterbox
+  for a "nano" model that does not exist in the released package. That option
+  is gone from the code and from this file (the old check 15f with `--nano`).
+  The tests now use a stand-in with exactly the call signatures of
+  chatterbox-tts 0.1.7. **It has still never run with the real model: check
+  15b is the first time.**
+- **R1, first turn still slow (6.4 s).** The cause is not known. The warm-up
+  now sends exactly what a real turn sends, and start-up prints how long the
+  model took to read its instructions. Stage 7T measures it.
+- **N1, start of a sentence lost in `friday listen`.** All the sound reached
+  the speech model. FRIDAY's own noise filter could drop the first part of a
+  sentence on a poor microphone; it now keeps or drops an utterance as a whole.
+  Whether this was the cause is not proven. Stage 7T re-tests it.
+- **N2, noise turned into words ("Good night." from 0.3 s).** A phrase with
+  more words than the sound could hold is now ignored. Single words ("yes",
+  "stop") still pass.
+- **N3, invented thoughts and repeated apologies.** New lines in her
+  instructions. Small local models do not always obey; note what happens.
+- The timing line said `| None` for a fixed reply. It now says `fixed reply`.
 
-One finding is about equipment, not code: the Bluetooth earbuds. Stage 6 below
-has a new section about it. **Sort that out first; it decides how everything
-else sounds.**
+Not a fault in the code: with the earbud microphone open, Bluetooth plays
+everything at telephone quality, **Chatterbox included**. The owner has no other
+microphone, so judge the Chatterbox voice twice: once from the saved sample at
+full quality (check 15c), once live (check 15d). A headset splitter cable (one
+4-pole socket to separate microphone and headphone plugs) would let the wired
+phone earphones be used as microphone and speaker on this PC, at full quality.
+Mention it to the owner; it is their choice.
 
 What to do now, in this order:
 
-1. Stage 7R (re-test after the fixes), including the microphone part of stage 6.
-2. Stage 7S (disk space).
-3. Stage 9 (models drive), then stage 15 (the expressive voice). This is the
-   part the owner cares about most, so it comes before the rest.
-4. Stage 8, then stages 10 to 14, as far as the SSD allows (stage 7S).
+1. Stage 7T (short re-test, about ten minutes with the owner).
+2. Stage 15 from check 15b.
+3. Stage 8, then stages 10 to 14, as far as the SSD allows (stage 7S).
 
 ## Context
 
@@ -150,7 +160,7 @@ If the clone asks for a login, the repository is private: let the owner sign in.
 pytest -q
 ```
 
-**Check 2:** all tests pass (148 at the time of writing).
+**Check 2:** all tests pass (154 at the time of writing).
 
 ## Stage 3: the talking model, on the CPU
 
@@ -413,6 +423,77 @@ One session of 10 turns or more, full terminal output into the report:
 - **R6. Ctrl+C in `friday chat`** quits at once, with no error text.
 
 **Check 7R-c:** R1 to R3 as expected, no `[error: ...]` lines, no traceback.
+
+## Stage 7T: re-test after the second fixes (owner must be present)
+
+```bash
+cd ~/local-ai/Project-FRIDAY
+git pull
+cd backend
+source .venv/bin/activate
+pip install -e ".[dev,secrets,voice]"
+pytest
+```
+
+**Check 7T-a:** 154 passed.
+
+```bash
+friday listen
+```
+
+The owner reads sentence 3 of stage 6 three times ("Friday, ask Claude Code to
+list the files in this project."), with the short pause after "Friday" that
+comes naturally, then taps the desk or clicks the tongue a few times. Each
+line now ends like `[2.6 s of speech in 5.5 s of sound, 357 ms]`.
+
+**Check 7T-b:** the sentence is complete all three times. Taps show as
+`heard> (nothing)` or `heard> (ignored as noise: ...)`. Copy every line.
+
+Stop `friday listen`. Make sure the model is not already loaded, so the test
+starts cold:
+
+```bash
+ollama stop gemma3-cpu
+```
+
+```bash
+friday voice
+```
+
+During `Loading speech models...` a new line appears, like
+`[local: read its instructions in 9.3 s]`. Copy it. Then the owner asks one
+question, waits for the answer, asks a second one, and quits.
+
+**Check 7T-c:** the first turn's `first token` is close to the second turn's
+(under about 1.5 s). Report the three numbers: the "read its instructions"
+time, and `first token` of turns 1 and 2.
+
+If the first turn is still slow, collect this for the report. It asks Ollama
+the same thing twice with a different question, and shows how long the model
+spent reading each time. Run each line, in this order:
+
+```bash
+curl -s http://127.0.0.1:11434/api/chat -d '{"model":"gemma3-cpu","stream":false,"keep_alive":"30m","options":{"temperature":0.8,"num_predict":5},"messages":[{"role":"system","content":"You are a helpful assistant who answers in one short sentence. Rainbows, octopuses, rivers, mountains, trains and bridges are your favourite subjects, and you never use lists."},{"role":"user","content":"Hi"}]}' | python3 -c 'import json,sys; d=json.load(sys.stdin); print("read", d.get("prompt_eval_count"), "tokens in", round(d.get("prompt_eval_duration",0)/1e6), "ms; load", round(d.get("load_duration",0)/1e6), "ms")'
+```
+
+```bash
+curl -s http://127.0.0.1:11434/api/chat -d '{"model":"gemma3-cpu","stream":false,"keep_alive":"30m","options":{"temperature":0.8,"num_predict":5},"messages":[{"role":"system","content":"You are a helpful assistant who answers in one short sentence. Rainbows, octopuses, rivers, mountains, trains and bridges are your favourite subjects, and you never use lists."},{"role":"user","content":"What is a river?"}]}' | python3 -c 'import json,sys; d=json.load(sys.stdin); print("read", d.get("prompt_eval_count"), "tokens in", round(d.get("prompt_eval_duration",0)/1e6), "ms; load", round(d.get("load_duration",0)/1e6), "ms")'
+```
+
+```bash
+ollama ps
+```
+
+```bash
+ollama --version
+```
+
+If Ollama keeps what it has read, the second line's time is much shorter than
+the first. Copy both lines, `ollama ps` and the version into the report.
+
+In the same `friday voice` session or a new one, also note for **N3**: correct
+her once ("no, I meant ...") and ask "what were you thinking about just now?".
+Copy her replies word for word.
 
 ## Stage 7S: disk space on the SSD
 
@@ -783,7 +864,7 @@ pip install -e ".[dev,secrets,voice]"
 pytest -q
 ```
 
-**Check 15a:** 148 passed.
+**Check 15a:** 154 passed.
 
 Chatterbox was developed on Python 3.11. Its environment is about 6 to 8 GB
 (PyTorch with the NVIDIA libraries), and it has to live on the SSD. Check the
@@ -877,6 +958,9 @@ curl -s -o laugh.pcm -w "%{time_total} s\n" -X POST http://127.0.0.1:5005/speak 
 aplay -f S16_LE -c 1 -r 24000 laugh.pcm
 ```
 
+Play them with no program using a microphone (`friday voice` and
+`friday listen` closed), so the earbuds are in their full-quality mode.
+
 **Check 15c:** all three play as clear speech; the owner says whether the laugh
 and the sigh are audible as sounds, not read out as words. Record the three
 times. The short sentence should take well under a second; if it takes more
@@ -929,15 +1013,16 @@ Ctrl+C in its terminal. She must carry on in the built-in voice, with the line
 again; within about a minute of talking she must be back, with
 `[expressive voice is back]`.
 
-**Optional, check 15f (no graphics card):** stop the service and try the small
-model on the CPU, timing the same three sentences:
+**Optional, check 15f (no graphics card):** stop the service and start the same
+model on the CPU, timing the same three sentences. There is no smaller model in
+the released package, so expect this to be slow; the point is to measure it.
 
 ```bash
-~/local-ai/chatterbox-venv/bin/python servers/chatterbox_server.py --device cpu --nano
+~/local-ai/chatterbox-venv/bin/python servers/chatterbox_server.py --device cpu
 ```
 
-This shows whether she can keep an expressive voice while the card is busy with
-an image or video job.
+This shows whether she could keep an expressive voice while the card is busy
+with an image or video job.
 
 Leave `tts_server_url` in the config only if check 15d passed and the owner
 prefers the new voice. The voice service is not started automatically yet: the
@@ -972,7 +1057,10 @@ Write `backend/SETUP_REPORT.md` (do not commit it) with:
 12. Stage 7R: which microphone and earbud profile were used; the owner's
     verdict on the Kokoro sample at full quality; R1 to R6. Stage 7S: free
     space on the SSD before each stage.
-13. Anything that had to be done differently from this file.
+13. Stage 7T: every `heard>` line; the "read its instructions" time and the
+    `first token` of turns 1 and 2; the two `curl` lines, `ollama ps` and the
+    Ollama version if the first turn was slow; her replies for N3.
+14. Anything that had to be done differently from this file.
 
 Before saving the report, check that it and `backend/handoff/` contain no keys
 or tokens.

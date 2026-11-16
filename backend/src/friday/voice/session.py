@@ -67,7 +67,7 @@ from friday.voice.base import (
     VoiceActivityDetector,
 )
 from friday.voice.chunker import SentenceChunker
-from friday.voice.control import ControlIntent, classify, is_filler
+from friday.voice.control import ControlIntent, classify, is_filler, is_implausible
 from friday.voice.sanitize import SpeechSanitizer
 from friday.voice.segmenter import (
     SegmenterConfig,
@@ -360,6 +360,8 @@ class VoiceSession:
             try:
                 transcript = await self.stt.transcribe(utterance.pcm, utterance.sample_rate)
                 text = transcript.text.strip()
+                if is_implausible(text, utterance.speech_ms):
+                    text = ""  # a click or a cough that Whisper made words of
                 stt_ms = (loop.time() - ended_at) * 1000
                 intent = classify(text) if text else None
                 if text:

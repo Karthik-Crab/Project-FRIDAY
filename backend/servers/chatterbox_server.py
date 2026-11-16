@@ -6,8 +6,9 @@ this machine only. Stopping this process frees the graphics card.
 
     python chatterbox_server.py --device cuda --port 5005
 
-Status: the HTTP layer is covered by tests with a stand-in model. It has never
-been run with the real Chatterbox model.
+Status: the HTTP layer and the calls into Chatterbox are covered by tests with
+a stand-in that has the same call signatures as chatterbox-tts 0.1.7. It has
+never been run with the real Chatterbox model.
 
 Endpoints
     GET  /health  -> {"ok": true, "model": ..., "device": ..., "sample_rate": ...}
@@ -40,12 +41,13 @@ class Voice(Protocol):
 class ChatterboxVoice:
     """The real model. Imported lazily so tests need neither torch nor a GPU."""
 
-    def __init__(self, device: str, nano: bool, reference: str | None) -> None:
+    def __init__(self, device: str, reference: str | None) -> None:
         from chatterbox.tts_turbo import ChatterboxTurboTTS
 
-        self.name = "chatterbox-nano" if nano else "chatterbox-turbo"
+        self.name = "chatterbox-turbo"
         self.device = device
-        self._model: Any = ChatterboxTurboTTS.from_pretrained(device=device, nano=nano)
+        # Chatterbox 0.1.7 takes the device and nothing else here.
+        self._model: Any = ChatterboxTurboTTS.from_pretrained(device)
         self.sample_rate = int(self._model.sr)
         self._reference: str | None = None
         if reference:
@@ -139,12 +141,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--port", type=int, default=5005)
     parser.add_argument("--device", default="cuda", help="cuda or cpu")
-    parser.add_argument("--nano", action="store_true", help="the smaller model, fine on a CPU")
     parser.add_argument("--voice", default=None, help="reference recording of the voice to use")
     args = parser.parse_args(argv)
 
     print(f"Loading the voice model on {args.device}...", flush=True)
-    voice = ChatterboxVoice(args.device, args.nano, args.voice)
+    voice = ChatterboxVoice(args.device, args.voice)
     voice.speak("Ready.")  # pay the start-up cost now
     # 127.0.0.1 only: there is no login, so it must not be reachable from the network.
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(voice))

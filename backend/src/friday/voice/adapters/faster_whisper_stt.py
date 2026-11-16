@@ -98,14 +98,20 @@ class FasterWhisperSTT:
         )
         # ``segments`` is a lazy generator: iterating it does the actual work.
         # Whisper invents plausible text ("Thank you.") on noise. Its own scores
-        # say when: a segment that is probably not speech AND low-confidence is
-        # dropped. Segments without scores (other backends, stubs) are kept.
+        # say when: probably not speech AND low-confidence. That is judged for
+        # the utterance as a whole. Dropping single segments cut the start off
+        # real sentences on a poor microphone ("Friday, ask Claude Code" gone,
+        # "to list the files" kept), which is worse than a stray word.
+        # Segments without scores (other backends, stubs) count as speech.
         kept = []
+        speech = False
         for seg in segments:
             no_speech = getattr(seg, "no_speech_prob", 0.0)
             logprob = getattr(seg, "avg_logprob", 0.0)
-            if no_speech > self._max_no_speech and logprob < self._min_logprob:
-                continue
+            if not (no_speech > self._max_no_speech and logprob < self._min_logprob):
+                speech = True
             kept.append(seg.text.strip())
+        if not speech:
+            kept = []
         text = " ".join(t for t in kept if t).strip()
         return Transcript(text=text, language=getattr(info, "language", None))
