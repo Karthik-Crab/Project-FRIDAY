@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FRIDAY</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%23d97757'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-top">
+      <div class="brand"><span class="brand-dot"></span>FRIDAY</div>
+      <button class="icon-btn only-mobile" id="close-sidebar" aria-label="Close menu">✕</button>
+    </div>
+    <button class="new-chat" id="new-chat"><span>＋</span> New chat</button>
+    <div class="list-label">Chats</div>
+    <nav class="conv-list" id="conv-list"></nav>
+    <div class="sidebar-foot" id="models"></div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="icon-btn only-mobile" id="open-sidebar" aria-label="Open menu">☰</button>
+      <h1 class="title" id="title">New chat</h1>
+      <button class="voice-toggle" id="voice-toggle" aria-pressed="false" title="Talk to FRIDAY">
+        <span class="voice-dot"></span><span class="voice-label" id="voice-label">Voice</span>
+      </button>
+    </header>
+
+    <section class="thread" id="thread">
+      <div class="empty" id="empty">
+        <div class="empty-mark"></div>
+        <h2>What's on your mind?</h2>
+        <p>Chat, or switch to <b>Picture</b> or <b>Music</b> below to make something.</p>
+        <div class="chips" id="chips"></div>
+      </div>
+      <div class="messages" id="messages"></div>
+    </section>
+
+    <div class="voice-bar hidden" id="voice-bar">
+      <span class="pulse"></span><span id="voice-status">Listening…</span>
+      <span class="voice-partial" id="voice-partial"></span>
+    </div>
+
+    <form class="composer" id="composer" autocomplete="off">
+      <div class="modes" id="modes" role="tablist">
+        <button type="button" class="mode active" data-mode="chat" role="tab">Chat</button>
+        <button type="button" class="mode" data-mode="image" role="tab">Picture</button>
+        <button type="button" class="mode" data-mode="music" role="tab">Music</button>
+      </div>
+      <div class="input-row">
+        <textarea id="input" rows="1" placeholder="Message FRIDAY…"></textarea>
+        <button type="submit" class="send" id="send" aria-label="Send">↑</button>
+      </div>
+      <div class="hint" id="hint">Enter to send · Shift+Enter for a new line</div>
+    </form>
+  </main>
+</div>
+<div class="toast hidden" id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

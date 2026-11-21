@@ -23,12 +23,15 @@ voice = [
 # Optional speech-to-speech voice (OpenAI Realtime API). Needs internet + API key.
 realtime = ["websockets>=13", "sounddevice>=0.4.6"]
 secrets = ["keyring>=24"]
+# The chat app in the browser (`friday app`).
+app = ["fastapi>=0.110", "uvicorn>=0.29", "websockets>=13"]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
     "mypy>=1.10",
     "websockets>=13",
+    "fastapi>=0.110",
 ]
 
 [project.scripts]

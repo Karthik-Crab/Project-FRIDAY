@@ -1,0 +1,129 @@
+"""Starts and stops the expressive voice service (Chatterbox) on demand.
+
+The voice service needs about 3 GB of the graphics card. The app starts it
+only while voice mode is on and stops it afterwards, so the talking model and
+picture making have the whole card the rest of the time.
+
+The command comes from the config file, never from anything said or typed.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import subprocess
+import sys
+import time
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+from friday.core.errors import FridayError
+
+log = logging.getLogger(__name__)
+
+
+class VoiceServiceError(FridayError):
+    pass
+
+
+class VoiceServiceLauncher:
+    def __init__(
+        self,
+        command: Sequence[str],
+        health_url: str,
+        *,
+        env: Mapping[str, str] | None = None,
+        log_path: Path | None = None,
+        start_timeout_s: float = 120.0,
+        poll_s: float = 1.0,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self.command = [str(Path(part).expanduser()) if "~" in part else part for part in command]
+        self.health_url = health_url.rstrip("/") + "/health"
+        self.env = {k: str(Path(v).expanduser()) if "~" in v else v for k, v in (env or {}).items()}
+        self.log_path = log_path
+        self.start_timeout_s = start_timeout_s
+        self._poll_s = poll_s
+        self._client = client or httpx.AsyncClient(timeout=3.0)
+        self._process: subprocess.Popen[bytes] | None = None
+
+    @property
+    def started_here(self) -> bool:
+        return self._process is not None and self._process.poll() is None
+
+    async def is_up(self) -> bool:
+        try:
+            response = await self._client.get(self.health_url)
+        except httpx.HTTPError:
+            return False
+        return response.status_code == 200
+
+    def _spawn(self) -> subprocess.Popen[bytes]:
+        output: Any = subprocess.DEVNULL
+        if self.log_path is not None:
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            output = self.log_path.open("ab")
+        options: dict[str, Any] = {}
+        if sys.platform == "win32":
+            options["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            options["start_new_session"] = True
+        try:
+            return subprocess.Popen(
+                self.command,
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                env={**os.environ, **self.env},
+                **options,
+            )
+        except OSError as exc:
+            raise VoiceServiceError(
+                f"could not start the voice service ({self.command[0]}): {exc}"
+            ) from exc
+        finally:
+            if output is not subprocess.DEVNULL:
+                output.close()
+
+    async def start(self) -> bool:
+        """Start the service if it is not running. True if this call started it."""
+        if await self.is_up():
+            return False
+        if not self.command:
+            raise VoiceServiceError("no command to start the voice service is set")
+        if self._process is None or self._process.poll() is not None:
+            log.info("starting the voice service: %s", " ".join(self.command))
+            self._process = self._spawn()
+        deadline = time.monotonic() + self.start_timeout_s
+        while time.monotonic() < deadline:
+            await asyncio.sleep(self._poll_s)
+            if await self.is_up():
+                return True
+            if self._process.poll() is not None:
+                where = f" See {self.log_path}." if self.log_path else ""
+                raise VoiceServiceError(f"the voice service stopped while starting.{where}")
+        self.stop()
+        raise VoiceServiceError(
+            f"the voice service did not start within {self.start_timeout_s:.0f} seconds"
+        )
+
+    def stop(self) -> None:
+        """Stop the service if this app started it, which frees its graphics memory."""
+        process, self._process = self._process, None
+        if process is None or process.poll() is not None:
+            return
+        log.info("stopping the voice service")
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+    async def aclose(self) -> None:
+        self.stop()
+        await self._client.aclose()

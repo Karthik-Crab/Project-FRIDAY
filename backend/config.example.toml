@@ -138,3 +138,16 @@ music_seconds = 30
 music_lyrics = "[instrumental]"
 music_bpm = 110
 music_key = "C major"
+
+# ---------------------------------------------------------------------------
+# The chat app: `friday app` opens it in the browser (this computer only).
+# Saved chats: conversations.db next to this file.
+# ---------------------------------------------------------------------------
+[app]
+port = 8765
+open_browser = true
+
+# To let the app start the expressive voice only while voice mode is on, add
+# under [voice] (adjust the paths):
+# tts_server_command = ["~/local-ai/chatterbox-venv/bin/python", "~/local-ai/Project-FRIDAY/backend/servers/chatterbox_server.py", "--device", "cuda", "--port", "5005"]
+# tts_server_env = { HF_HOME = "/mnt/studio/huggingface", HF_HUB_OFFLINE = "1" }

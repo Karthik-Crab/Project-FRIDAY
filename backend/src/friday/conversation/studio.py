@@ -99,8 +99,20 @@ _DRAW = re.compile(
 _ANY_NOUN = rf"(?:{_IMAGE_NOUNS}|{_MUSIC_NOUNS}|photo|drawing|song)"
 _CANCEL = re.compile(
     rf"{_LEAD}(?:cancel|stop|abort){_SEP}(?:(?:the|that|my){_SEP})?(?P<noun>{_ANY_NOUN})"
-    rf"(?:{_SEP}(?:job|task))?\W*$",
+    rf"(?:{_SEP}(?:job|task|request))?\W*$",
     re.IGNORECASE,
+)
+# While a read-back waits for "yes": the owner does not want it after all.
+_DROP = re.compile(
+    r"\b(?:cancel|stop|abort|never\s*mind|forget\s+(?:it|that|about\s+it)|"
+    r"don'?t\s+(?:do|make|bother)|do\s+not\s+(?:do|make)|leave\s+it|drop\s+it)\b",
+    re.IGNORECASE,
+)
+# "No, I meant a Doberman": the words after it replace the description.
+_CORRECTION = re.compile(
+    rf"^\W*(?:no|nope|not\s+that|wait)\b{_SEP}(?:(?:i{_SEP}(?:meant|mean|said|wanted|want)|"
+    rf"make{_SEP}it|it{_SEP}should{_SEP}(?:be|show)|instead){_SEP})*(?P<rest>\w.*?)\W*$",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -204,6 +216,8 @@ class StudioDelegate:
         self.pending: Request | None = None  # read back, waiting for "yes"
         self._job: asyncio.Task[None] | None = None
         self._job_kind: Kind | None = None
+        # One job on the graphics card at a time; others wait their turn.
+        self._card = asyncio.Lock()
 
     @property
     def busy(self) -> bool:
@@ -244,13 +258,18 @@ class StudioDelegate:
             return (
                 f"Okay, I'm making {what}. It takes a minute or two; I'll tell you when it's ready."
             )
-        if is_no(text):
+        if is_no(text) or _DROP.search(text):
             self.pending = None
             return "Okay, I won't make it."
+        correction = _CORRECTION.match(text)
+        if correction:
+            self.pending = Request(self.pending.kind, correction.group("rest"))
+            return self._read_back()
         if len(text.split()) < 3:
             return "Say yes to make it, or no to drop it."
-        # Neither yes nor no: still describing it.
-        self.pending = Request(self.pending.kind, f"{self.pending.prompt} {text.strip(' .!?')}")
+        # Neither yes nor no: a new description, which replaces the old one.
+        # (Adding it on made a long muddle out of every correction.)
+        self.pending = Request(self.pending.kind, text.strip(" .!?"))
         return self._read_back()
 
     def _start(self, request: Request) -> str:
@@ -280,8 +299,21 @@ class StudioDelegate:
             except Exception:  # a broken listener must not lose the result
                 log.exception("studio listener failed")
 
-    async def make(self, request: Request) -> Notice:
-        """Run one job now and return what to tell the user."""
+    @property
+    def queued_or_running(self) -> bool:
+        return self._card.locked()
+
+    async def make(self, request: Request, on_start: Callable[[], None] | None = None) -> Notice:
+        """Run one job (after any job already running) and return what to tell the user.
+
+        ``on_start`` is called when its turn comes and the work begins.
+        """
+        async with self._card:
+            if on_start is not None:
+                on_start()
+            return await self._make(request)
+
+    async def _make(self, request: Request) -> Notice:
         held: list[str] = []
         path: Path | None = None
         try:

@@ -586,6 +586,108 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
     await session.run()
 
 
+async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool) -> None:
+    """The chat app in the browser: chats, pictures, music and voice."""
+    try:
+        import uvicorn
+    except ImportError as exc:
+        raise FridayError(
+            'the chat app needs its parts installed: pip install -e ".[app]"'
+        ) from exc
+    from friday.app.server import create_app
+    from friday.app.services import AppServices
+    from friday.app.store import ConversationStore
+    from friday.app.voice import VoiceMode, real_session_builder
+    from friday.integrations.voice_service import VoiceServiceLauncher
+
+    here = default_config_path().parent
+    studio = _studio(config, router)
+    notes = _notes(config)
+    services: AppServices | None = None
+
+    def make_engine(conversation_id: str) -> ConversationEngine:
+        delegate = _delegate(config, notes)
+        if delegate is not None:
+
+            def finished(notice: object) -> None:
+                from friday.conversation.delegation import Notice
+
+                assert isinstance(notice, Notice)
+                if services is not None:
+                    services.notice(
+                        conversation_id, notice.spoken, f"(asked Claude Code: {notice.task})"
+                    )
+
+            delegate.on_done = finished
+        return ConversationEngine(
+            router,
+            Persona(user_name=config.user_name),
+            channel=Channel.TEXT,
+            mode=config.default_mode,
+            delegate=delegate,
+            notes=notes,
+            studio=studio,
+        )
+
+    v = config.voice
+    launcher = None
+    if v.tts_server_url and v.tts_server_command:
+        launcher = VoiceServiceLauncher(
+            v.tts_server_command,
+            v.tts_server_url,
+            env=v.tts_server_env,
+            log_path=here / "voice-service.log",
+            start_timeout_s=v.tts_server_start_timeout_s,
+        )
+    voice = VoiceMode(
+        real_session_builder(config, router),
+        launcher=launcher,
+        router=router,
+        gpu_providers=config.studio.gpu_providers,
+    )
+    card = set(config.studio.gpu_providers)
+    models = [
+        {
+            "label": f"{p.info.model} · "
+            + ("graphics card" if name in card else "processor" if p.info.local else "online"),
+            "model": p.info.model,
+        }
+        for name, p in router.providers.items()
+    ]
+    services = AppServices(
+        ConversationStore(here / "conversations.db"),
+        make_engine,
+        studio=studio,
+        voice=voice,
+        models=models,
+    )
+    port = config.app.port
+    server = uvicorn.Server(
+        uvicorn.Config(
+            create_app(services, port=port), host="127.0.0.1", port=port, log_level="warning"
+        )
+    )
+    url = f"http://127.0.0.1:{port}/"
+
+    async def when_ready() -> None:
+        while not server.started:  # noqa: ASYNC110 (uvicorn offers no event)
+            await asyncio.sleep(0.1)
+        print(f"FRIDAY is open at {url}  (Ctrl+C here to close it)")
+        if open_browser:
+            import webbrowser
+
+            webbrowser.open(url)
+        with contextlib.suppress(Exception):
+            await _warm_up_local(router)
+
+    ready = asyncio.create_task(when_ready())
+    try:
+        await server.serve()
+    finally:
+        ready.cancel()
+        await voice.aclose()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="friday")
     parser.add_argument("--config", type=Path, default=None)
@@ -605,6 +707,8 @@ def main(argv: list[str] | None = None) -> int:
     make = sub.add_parser("make", help="make a picture or music with ComfyUI now")
     make.add_argument("kind", choices=["image", "music"])
     make.add_argument("prompt", help="what to make, in quotes")
+    app = sub.add_parser("app", help="open the chat app in the browser")
+    app.add_argument("--no-browser", action="store_true", help="do not open the browser")
     args = parser.parse_args(argv)
 
     try:
@@ -626,6 +730,8 @@ def main(argv: list[str] | None = None) -> int:
             asyncio.run(_mic(config, args.seconds))
         elif args.command == "listen":
             asyncio.run(_listen(config, args.model, args.beam))
+        elif args.command == "app":
+            asyncio.run(_app(config, router, config.app.open_browser and not args.no_browser))
         elif args.command == "make":
             return asyncio.run(_make(config, router, args.kind, args.prompt))
         else:

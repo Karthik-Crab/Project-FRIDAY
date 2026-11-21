@@ -265,7 +265,7 @@ class FakeComfy:
                 200, content=b"\x89PNG fake " + request.url.params["filename"].encode()
             )
         if path == "/free":
-            assert json.loads(request.content) == {"unload_models": True, "free_memory": True}
+            assert json.loads(request.content) == {"unload_models": True, "free_memory": False}
             self.freed += 1
             return httpx.Response(200)
         if path == "/interrupt":
@@ -407,11 +407,11 @@ async def test_read_back_yes_makes_the_picture_and_shares_the_card(tmp_path: Pat
     assert [p.info.name for p in router.candidates("default")] == ["gpu", "local"]
 
 
-async def test_no_drops_it_and_more_words_extend_it(tmp_path: Path) -> None:
+async def test_no_drops_it_and_more_words_replace_it(tmp_path: Path) -> None:
     fake = FakeComfy()
     studio, _, _ = _studio(fake, tmp_path)
     studio.handle("draw a lighthouse")
-    assert studio.handle("at night with a storm coming") == (
+    assert studio.handle("a lighthouse at night with a storm coming") == (
         "Picture: a lighthouse at night with a storm coming. Shall I make it?"
     )
     assert studio.handle("cool") == "Say yes to make it, or no to drop it."
@@ -588,3 +588,26 @@ def test_request_after_other_sentences(text: str, kind: Kind | None, prompt: str
         assert found is None
     else:
         assert found == Request(kind, prompt or "")
+
+
+async def test_the_owners_first_voice_test(tmp_path: Path) -> None:
+    """The conversation from the first voice test, 2026-11-21."""
+    fake = FakeComfy()
+    studio, _, _ = _studio(fake, tmp_path)
+    studio.handle("Can you generate an image of a government dog sitting in front of a home?")
+    assert studio.handle("No, I meant Doberman Dog.") == "Picture: Doberman Dog. Shall I make it?"
+    assert studio.handle("A Doberman dog sitting in front of a home.") == (
+        "Picture: A Doberman dog sitting in front of a home. Shall I make it?"
+    )
+    assert studio.handle("Just don't do anything.") == "Okay, I won't make it."
+    assert studio.pending is None
+    studio.handle("make a picture of a cat")
+    assert studio.handle("Cancel the picture request.") == "I'm not making anything right now."
+    assert studio.pending is None and fake.queued == []
+
+
+@pytest.mark.parametrize("answer", ["never mind", "forget it", "stop", "leave it, thanks"])
+async def test_ways_of_dropping_a_read_back(tmp_path: Path, answer: str) -> None:
+    studio, _, _ = _studio(FakeComfy(), tmp_path)
+    studio.handle("make a picture of a cat")
+    assert studio.handle(answer) == "Okay, I won't make it."

@@ -118,9 +118,38 @@ system snapshot. Found on 2026-11-21:
 - Possible later improvement: stop or move Chatterbox off the card during a
   music job.
 
+### Second voice test, and the chat app
+
+- Second voice test: the request was recognised, but every answer to the
+  read-back ("No, I meant Doberman Dog", "Just don't do anything", "Cancel the
+  picture request") was added to the description. Fixed: "no", "cancel",
+  "never mind", "don't do anything" ... drop it; "No, I meant X" replaces the
+  description with X; other words replace it rather than being added on.
+- The owner asked to set voice-only use aside and have a chat app like
+  Claude's instead: saved chats, pictures, music, and voice as a switch, with
+  Chatterbox on the card only while voice is on, and RAM (32 GB) used well.
+  Built as `friday app` (ROADMAP M1.3o).
+- Chatterbox's model copied to `/mnt/studio/huggingface` (3.8 GB) so it
+  starts from the cache; the app starts it with `[voice] tts_server_command`
+  and `tts_server_env` and stops it when voice is switched off.
+- ComfyUI's `/free` now keeps models in RAM (`free_memory: false`).
+- Run on the PC through the app's live channel (2026-11-21):
+
+| Step | Time | Card afterwards |
+|---|---|---|
+| Question ("why is the sky blue?") | 3.3 s, `llama3.1:8b` | |
+| "Make a picture of ..." in chat | offer card in 0.01 s, no model asked | |
+| Picture (Make pressed) | 30 s | llama 5196 MiB, back on the card |
+| Voice on | 25 s | Chatterbox 3056 MiB, llama 2826 MiB beside it |
+| Voice off | 2 s | Chatterbox gone, llama 5196 MiB |
+| Picture, music, picture in a row | 30 s, 17 s, 28 s | |
+
+- RAM after these: 6 GB used by programs, 17 GB file cache (models), 24 GB
+  available.
+
 ### Not yet done
 
-- Voice test with the owner after the fix ("make a picture of ...", "yes").
+- The owner trying the app.
 - Windows Fast Startup off (`powercfg /h off`) the next time in Windows, so
   the Windows partition holding the studio file is always cleanly closed.
 

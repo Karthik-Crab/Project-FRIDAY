@@ -286,7 +286,9 @@ class ComfyClient:
     async def free(self) -> None:
         """Ask ComfyUI to give the graphics card back. Best effort."""
         try:
-            await self._client.post("/free", json={"unload_models": True, "free_memory": True})
+            # Off the graphics card, but kept in RAM (32 GB on the PC), so
+            # the next job starts in seconds instead of reading the disk.
+            await self._client.post("/free", json={"unload_models": True, "free_memory": False})
         except httpx.HTTPError as exc:
             log.warning("ComfyUI did not free the card: %s", type(exc).__name__)
 

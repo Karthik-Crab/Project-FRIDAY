@@ -66,6 +66,11 @@ class VoiceSettings(_Strict):
     # set, it is used first and the built-in voice above is the fallback.
     tts_server_url: str | None = None
     tts_server_timeout_s: float = Field(default=20.0, ge=1, le=120)
+    # How the chat app starts the voice service when voice mode is switched on
+    # (and stops it when switched off). [] = start it yourself.
+    tts_server_command: list[str] = Field(default_factory=list)
+    tts_server_env: dict[str, str] = Field(default_factory=dict)
+    tts_server_start_timeout_s: float = Field(default=120.0, ge=5, le=900)
 
     @field_validator("tts_server_url")
     @classmethod
@@ -196,6 +201,13 @@ def _default_routes() -> dict[str, list[str]]:
     return {"default": ["local"], "offline": ["local"]}
 
 
+class AppSettings(_Strict):
+    """The chat app in the browser (``friday app``)."""
+
+    port: int = Field(default=8765, ge=1024, le=65535)
+    open_browser: bool = True
+
+
 class FridayConfig(_Strict):
     user_name: str = "Karthik"
     default_mode: Mode = Mode.COMPANION
@@ -208,6 +220,7 @@ class FridayConfig(_Strict):
     claude_code: ClaudeCodeSettings = Field(default_factory=ClaudeCodeSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     studio: StudioSettings = Field(default_factory=StudioSettings)
+    app: AppSettings = Field(default_factory=AppSettings)
 
     @model_validator(mode="after")
     def _check_routes(self) -> FridayConfig:
