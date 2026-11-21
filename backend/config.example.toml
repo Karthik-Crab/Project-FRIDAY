@@ -167,6 +167,9 @@ open_browser = true
 ffmpeg = ""                      # "" = find ffmpeg on the PATH; needed for "add some bass" to a song
 document_chars = 14000           # how much of an attached document goes to the model
                                  # (about 4 characters per token: keep below num_ctx)
+lan = false                      # true = phones/laptops on the home network may open FRIDAY
+                                 # after a passcode (set it with `friday passcode`); never
+                                 # reachable from the internet. Without a passcode: this PC only.
 
 # To let the app start the expressive voice only while voice mode is on, add
 # under [voice] (adjust the paths):

@@ -104,6 +104,7 @@ function toast(message) {
 
 async function api(path, options = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
+  if (res.status === 401) location.href = "/login"; // a home device whose sign-in ran out
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
   return res.json();
 }
@@ -577,6 +578,7 @@ async function attachFiles(list) {
       const res = await fetch(`/api/upload?name=${encodeURIComponent(file.name)}`, {
         method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file,
       });
+      if (res.status === 401) location.href = "/login";
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || res.statusText);
       Object.assign(a, data, { uploading: false });

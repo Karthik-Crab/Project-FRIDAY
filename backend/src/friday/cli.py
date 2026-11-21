@@ -835,12 +835,27 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
         helper_folders=_helper_folders(config),
     )
     port = config.app.port
+    from friday.app.lan import HomeAccess, addresses
+
+    access = HomeAccess(here) if config.app.lan else None
+    if access is not None and not access.has_passcode:
+        print("Home-network access is switched on but has no passcode yet, so FRIDAY")
+        print("stays on this computer only. Set one with:  friday passcode")
+        access = None
     server = uvicorn.Server(
         uvicorn.Config(
-            create_app(services, port=port), host="127.0.0.1", port=port, log_level="warning"
+            create_app(services, port=port, access=access),
+            host="0.0.0.0" if access is not None else "127.0.0.1",
+            port=port,
+            log_level="warning",
+            proxy_headers=False,  # the device's own address decides, never a header
         )
     )
     url = f"http://127.0.0.1:{port}/"
+    if access is not None:
+        print("Phones and laptops on your home network can open FRIDAY (passcode needed) at:")
+        for address in addresses(port):
+            print(f"    {address}")
 
     async def when_ready() -> None:
         while not server.started:  # noqa: ASYNC110 (uvicorn offers no event)
@@ -859,6 +874,28 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
     finally:
         ready.cancel()
         await voice.aclose()
+
+
+def _set_passcode() -> int:
+    """Asks for the home-network passcode twice; it is never shown or written down."""
+    import getpass
+
+    from friday.app.lan import MIN_LENGTH, HomeAccess
+
+    folder = default_config_path().parent  # where the app keeps its own files
+    print("Phones and laptops on your home network will need this passcode to open FRIDAY.")
+    print(f"Use at least {MIN_LENGTH} characters; a few unrelated words are easy to type and hard")
+    print("to guess. Setting a new one signs every device out.")
+    first = getpass.getpass("New passcode: ")
+    if len(first) < MIN_LENGTH:
+        print(f"Too short: at least {MIN_LENGTH} characters, please. Nothing was changed.")
+        return 1
+    if getpass.getpass("Type it again: ") != first:
+        print("The two didn't match. Nothing was changed.")
+        return 1
+    HomeAccess(folder).set_passcode(first)
+    print("Passcode saved. Restart FRIDAY to let your devices in.")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -882,11 +919,14 @@ def main(argv: list[str] | None = None) -> int:
     make.add_argument("prompt", help="what to make, in quotes")
     app = sub.add_parser("app", help="open the chat app in the browser")
     app.add_argument("--no-browser", action="store_true", help="do not open the browser")
+    sub.add_parser("passcode", help="set the passcode for phones and laptops at home")
     args = parser.parse_args(argv)
 
     try:
         config = load_config(args.config)
         configure_logging(config.log_level)
+        if args.command == "passcode":
+            return _set_passcode()
         router, warnings = build_router(config, KeyringEnvSecretStore())
         for w in warnings:
             log.warning(w)

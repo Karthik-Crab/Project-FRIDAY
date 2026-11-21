@@ -1,8 +1,10 @@
 """The chat app's web server: the page, saved chats, files, and a live channel.
 
-It listens on 127.0.0.1 only. Requests whose Host or Origin is not this
-machine's address are refused, so a web page on the internet cannot drive the
-app through the browser.
+It listens on 127.0.0.1 only, unless home-network access is switched on
+(``[app] lan``, see ``friday.app.lan``): then devices on the home network may
+connect after entering the passcode, and nothing from the internet may. Requests
+whose Host or Origin is not this machine are refused, so a web page on the
+internet cannot drive the app through the browser.
 """
 
 from __future__ import annotations
@@ -16,10 +18,11 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from friday.app import lan as home
 from friday.app.services import AppServices
 from friday.core.errors import FridayError
 from friday.documents import category
@@ -30,11 +33,35 @@ STATIC = Path(__file__).parent / "static"
 _LOCAL_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 
 
-def _allowed(host_header: str | None, port: int | None) -> set[str]:
+def _allowed(
+    host_header: str | None, port: int | None, access: home.HomeAccess | None = None
+) -> set[str]:
     hosts = set(_LOCAL_HOSTS)
     if port is not None:
         hosts |= {f"{h}:{port}" for h in _LOCAL_HOSTS}
+    if access is not None and host_header and home.home_host(host_header):
+        hosts.add(host_header)  # this computer's home-network address or .local name
     return hosts
+
+
+_SAFETY_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    # "same-origin", not "no-referrer": with no-referrer, Firefox sends "Origin: null"
+    # on the passcode form and the Origin check refuses it.
+    "Referrer-Policy": "same-origin",
+}
+
+
+def _who(client_ip: str | None, cookie: str | None, access: home.HomeAccess | None) -> str:
+    """'ok', 'sign-in' (home device not signed in yet) or 'refuse'."""
+    if access is None:
+        return "ok"  # home access off: the server listens on 127.0.0.1 only
+    if home.is_this_computer(client_ip):
+        return "ok"
+    if not access.has_passcode or not home.is_home_network(client_ip):
+        return "refuse"
+    return "ok" if access.signed_in(cookie) else "sign-in"
 
 
 def _local_origin(origin: str | None, hosts: set[str]) -> bool:
@@ -47,29 +74,93 @@ def _local_origin(origin: str | None, hosts: set[str]) -> bool:
 
 
 class _LocalOnly(BaseHTTPMiddleware):
-    def __init__(self, app: Any, port: int | None) -> None:
+    def __init__(self, app: Any, port: int | None, access: home.HomeAccess | None) -> None:
         super().__init__(app)
         self.port = port
+        self.access = access
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        hosts = _allowed(request.headers.get("host"), self.port)
+        response = await self._check(request, call_next)
+        for name, value in _SAFETY_HEADERS.items():
+            response.headers.setdefault(name, value)
+        return response
+
+    async def _check(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        hosts = _allowed(request.headers.get("host"), self.port, self.access)
         if request.headers.get("host") not in hosts:
             return JSONResponse({"error": "not this machine"}, status_code=403)
         if request.method not in ("GET", "HEAD") and not _local_origin(
             request.headers.get("origin"), hosts
         ):
             return JSONResponse({"error": "not this machine"}, status_code=403)
+        ip = request.client.host if request.client else None
+        who = _who(ip, request.cookies.get(home.COOKIE), self.access)
+        if who == "refuse":
+            return JSONResponse({"error": "not allowed"}, status_code=403)
+        if who == "sign-in" and request.url.path not in ("/login",):
+            if request.method == "GET" and not request.url.path.startswith(("/api/", "/ws")):
+                return RedirectResponse("/login", status_code=303)
+            return JSONResponse({"error": "sign in first"}, status_code=401)
         return await call_next(request)
 
 
-def create_app(services: AppServices, *, port: int | None = None) -> FastAPI:
+def create_app(
+    services: AppServices, *, port: int | None = None, access: home.HomeAccess | None = None
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         yield
         await services.aclose()
 
     app = FastAPI(title="FRIDAY", lifespan=lifespan, docs_url=None, redoc_url=None)
-    app.add_middleware(_LocalOnly, port=port)
+    app.add_middleware(_LocalOnly, port=port, access=access)
+
+    @app.get("/login")
+    async def login_form() -> HTMLResponse:
+        return HTMLResponse(home.login_page(), headers={"Cache-Control": "no-store"})
+
+    @app.post("/login")
+    async def login(request: Request) -> Response:
+        from urllib.parse import parse_qs
+
+        ip = request.client.host if request.client else ""
+        if access is None or not home.is_home_network(ip):
+            return RedirectResponse("/", status_code=303)  # this computer needs no passcode
+        body = await request.body()
+        passcode = (parse_qs(body[:4096].decode("utf-8", "replace")).get("passcode") or [""])[0]
+        wait = access.wait_left(ip)
+        token = access.sign_in(ip, passcode) if wait <= 0 else None
+        if token is None:
+            await asyncio.sleep(home.WRONG_DELAY)  # slows guessing down further
+            wait = access.wait_left(ip)
+            log.warning("wrong passcode from %s", ip)
+            message = (
+                f"Too many tries. Wait {int(wait // 60) + 1} minutes."
+                if wait > 0
+                else "That passcode isn't right."
+            )
+            page = home.login_page(message)
+            return HTMLResponse(page, status_code=401, headers={"Cache-Control": "no-store"})
+        log.warning("device signed in from %s", ip)
+        response = RedirectResponse("/", status_code=303)
+        response.set_cookie(
+            home.COOKIE,
+            token,
+            max_age=home.SESSION_DAYS * 86400,
+            httponly=True,
+            samesite="strict",
+            path="/",
+        )
+        return response
+
+    @app.post("/logout")
+    async def logout(request: Request) -> Response:
+        if access is not None:
+            access.sign_out(request.cookies.get(home.COOKIE))
+        response = JSONResponse({"ok": True})
+        response.delete_cookie(home.COOKIE, path="/")
+        return response
+
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
     @app.get("/")
@@ -146,9 +237,12 @@ def create_app(services: AppServices, *, port: int | None = None) -> FastAPI:
 
     @app.websocket("/ws")
     async def live(ws: WebSocket) -> None:
-        hosts = _allowed(ws.headers.get("host"), port)
-        if ws.headers.get("host") not in hosts or not _local_origin(
-            ws.headers.get("origin"), hosts
+        hosts = _allowed(ws.headers.get("host"), port, access)
+        ip = ws.client.host if ws.client else None
+        if (
+            ws.headers.get("host") not in hosts
+            or not _local_origin(ws.headers.get("origin"), hosts)
+            or _who(ip, ws.cookies.get(home.COOKIE), access) != "ok"
         ):
             await ws.close(code=1008)
             return

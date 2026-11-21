@@ -238,6 +238,9 @@ class AppSettings(_Strict):
 
     port: int = Field(default=8765, ge=1024, le=65535)
     open_browser: bool = True
+    # Let phones and laptops on the home network in, after a passcode
+    # (set it with ``friday passcode``). Never reachable from the internet.
+    lan: bool = False
     # ffmpeg changes attached songs (more bass). "" = find it on the PATH.
     ffmpeg: str = ""
     # How much of an attached document the talking model reads (characters).

@@ -1013,3 +1013,53 @@ Installed 2026-11-21 on /mnt/studio (about 18 GB; studio drive 19 GB free after)
   chats.
 - **Settings backup:** `config.toml.bak-20261121-web`.
 
+
+## Phones and laptops at home (passcode)
+
+FRIDAY can be opened from other devices on the home network: chats, pictures and
+music. Voice stays at the PC, because it uses the PC's own microphone and speakers.
+
+**One step to turn it on.** In a terminal on the PC, run this, choose a passcode and
+type it twice:
+
+    cd ~/local-ai/Project-FRIDAY/backend && .venv/bin/friday passcode
+
+Then restart FRIDAY. The terminal shows the addresses to type on the phone or laptop:
+`http://nobara-pc.local:8765/` (keeps working when the router changes the PC's
+number) or `http://192.168.0.110:8765/` today. The switch is `lan = true` under
+`[app]` in `~/.config/friday/config.toml` (backup: `config.toml.bak-20261121-lan`).
+Without a passcode, FRIDAY stays on this PC only.
+
+**How it is protected**
+- Only devices inside the home network (192.168.x.x, 10.x.x.x, 172.16–31.x.x) are let
+  in. Anything from the internet is refused, even if a router is set to forward it.
+  This PC itself never asks for the passcode.
+- Every page, chat, picture, song and the live connection need the passcode first.
+- The passcode is never stored, only a scrambled check of it (scrypt, salted), in a
+  file only your user can read. Signed-in devices get a random key that lasts 90 days.
+  The page's own scripts can't read that key, and other websites can't use it.
+- Guessing is stopped: 5 wrong tries lock that device out for 5 minutes. 20 wrong tries
+  from all devices together within an hour lock everyone out for that hour.
+- Other websites open on a signed-in phone can't drive FRIDAY, and outside names that
+  point at the PC (a trick called DNS rebinding) are refused.
+- Wrong tries and sign-ins are written in FRIDAY's log with the device's address.
+- A lost phone, or anyone you want out: run `friday passcode` again. A new passcode
+  signs every device out.
+- ComfyUI, the song AI, the search engine and the voice service stay on 127.0.0.1.
+  Devices reach them only through FRIDAY.
+- The firewall needed no change. The home-network zone already allows ports above
+  1024. The router opens nothing to the internet.
+
+**Limits**
+- It is plain http inside your home, the same as a router's settings page. Someone on
+  your Wi-Fi with special tools could read the traffic. Keep the Wi-Fi password
+  strong and don't give it to guests (use the router's guest network for them).
+  Encrypted https is the next step when we open it beyond the home.
+- A signed-in phone can do everything the PC can, including sending Claude Code
+  tasks. Each task still needs your "yes".
+
+Tested 2026-11-21 with a throwaway passcode on a separate test port over the real
+home network: blocked before sign-in, wrong passcode refused, another website's sign-in
+attempt refused, DNS rebinding refused, right passcode let in. Firefox then signed in
+and chatted over the live connection. The throwaway passcode and test server were
+deleted. Your own passcode has not been set.
