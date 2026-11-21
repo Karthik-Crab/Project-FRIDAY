@@ -38,6 +38,16 @@ FAILURE_REPLY = (
 )
 
 
+INCOGNITO_NO_NOTES = (
+    "This is an incognito chat, so I won't save anything to my memory. Say it in a "
+    "normal chat if you want me to remember it."
+)
+INCOGNITO_NO_TASKS = (
+    "This is an incognito chat, so I won't pass tasks to Claude Code: it keeps its own "
+    "record of every task. Ask in a normal chat."
+)
+
+
 @dataclass(slots=True)
 class TurnInfo:
     """Metadata about the most recent turn, for UI and diagnostics."""
@@ -80,6 +90,9 @@ class ConversationEngine:
         # Extra facts for the model from the app (where files go, what it can't do).
         self.app_note: str | None = None
         self.studio = studio
+        # An incognito chat: nothing goes into the memory file, and no task goes
+        # to Claude Code (it keeps its own record of every task).
+        self.incognito = False
 
     def is_control(self, text: str) -> bool:
         """Answered by FRIDAY's own fixed logic, not by the language model."""
@@ -258,6 +271,12 @@ class ConversationEngine:
             ack = self.persona.mode_acknowledgement(command.mode)
             return ack  # commands are control, not conversation: not stored in history
 
+        if self.incognito and (
+            is_agent_command(user_text)
+            or (self.delegate is not None and self.delegate.concerns(user_text))
+        ):
+            turn.was_command = True
+            return INCOGNITO_NO_TASKS
         if self.delegate is not None:
             reply = self.delegate.handle(user_text)
             if reply is not None:  # also control, not conversation
@@ -279,6 +298,9 @@ class ConversationEngine:
             turn.was_command = True
             return reply
 
+        if self.incognito and self.notes is not None and self.notes.writes(user_text):
+            turn.was_command = True
+            return INCOGNITO_NO_NOTES
         if self.notes is not None:
             reply = self.notes.handle(user_text)
             if reply is not None:  # stored on disk, not in the conversation

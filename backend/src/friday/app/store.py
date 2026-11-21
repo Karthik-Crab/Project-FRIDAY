@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     created REAL NOT NULL,
-    updated REAL NOT NULL
+    updated REAL NOT NULL,
+    incognito INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,6 +51,8 @@ class Conversation:
     title: str
     created: float
     updated: float
+    # Kept out of FRIDAY's memory; deleting it removes every trace (see services).
+    incognito: bool = False
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -80,7 +83,15 @@ class ConversationStore:
         self._db = sqlite3.connect(str(path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA foreign_keys = ON")
+        # Deleted chats are overwritten with zeros, not just marked free.
+        self._db.execute("PRAGMA secure_delete = ON")
         self._db.executescript(_SCHEMA)
+        columns = {r[1] for r in self._db.execute("PRAGMA table_info(conversations)")}
+        if "incognito" not in columns:  # a database from before incognito chats
+            with self._db:
+                self._db.execute(
+                    "ALTER TABLE conversations ADD COLUMN incognito INTEGER NOT NULL DEFAULT 0"
+                )
         self._lock = threading.Lock()
 
     def close(self) -> None:
@@ -89,13 +100,14 @@ class ConversationStore:
 
     # Conversations
 
-    def create(self, title: str = NEW_TITLE) -> Conversation:
+    def create(self, title: str = NEW_TITLE, incognito: bool = False) -> Conversation:
         now = time.time()
-        conv = Conversation(uuid.uuid4().hex, title, now, now)
+        conv = Conversation(uuid.uuid4().hex, title, now, now, incognito)
         with self._lock, self._db:
             self._db.execute(
-                "INSERT INTO conversations VALUES (?, ?, ?, ?)",
-                (conv.id, conv.title, conv.created, conv.updated),
+                "INSERT INTO conversations (id, title, created, updated, incognito)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (conv.id, conv.title, conv.created, conv.updated, int(incognito)),
             )
         return conv
 
@@ -104,12 +116,12 @@ class ConversationStore:
             row = self._db.execute(
                 "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
             ).fetchone()
-        return Conversation(**dict(row)) if row else None
+        return _conversation(row) if row else None
 
     def conversations(self) -> list[Conversation]:
         with self._lock:
             rows = self._db.execute("SELECT * FROM conversations ORDER BY updated DESC").fetchall()
-        return [Conversation(**dict(r)) for r in rows]
+        return [_conversation(r) for r in rows]
 
     def rename(self, conversation_id: str, title: str) -> None:
         with self._lock, self._db:
@@ -202,3 +214,9 @@ def _message(row: sqlite3.Row) -> StoredMessage:
     data = dict(row)
     data["meta"] = json.loads(data["meta"] or "{}")
     return StoredMessage(**data)
+
+
+def _conversation(row: sqlite3.Row) -> Conversation:
+    data = dict(row)
+    data["incognito"] = bool(data.get("incognito"))
+    return Conversation(**data)

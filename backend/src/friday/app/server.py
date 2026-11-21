@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -84,8 +85,10 @@ def create_app(services: AppServices, *, port: int | None = None) -> FastAPI:
         return [c.to_json() for c in services.store.conversations()]
 
     @app.post("/api/conversations")
-    async def new_conversation() -> dict[str, Any]:
-        cid = services.conversation_id(None)
+    async def new_conversation(request: Request) -> dict[str, Any]:
+        body = await request.body()
+        incognito = bool(body) and bool(json.loads(body).get("incognito"))
+        cid = services.conversation_id(None, incognito=incognito)
         conv = services.store.get(cid)
         assert conv is not None
         return conv.to_json()

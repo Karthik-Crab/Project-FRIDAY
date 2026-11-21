@@ -210,6 +210,10 @@ class NoteBook:
         # "Remember that film we saw?" is a question, not something to store.
         return None if fact.endswith("?") else fact
 
+    def writes(self, text: str) -> bool:
+        """Would this change the memory file ("remember that ...", "forget that")?"""
+        return self._fact(text) is not None or bool(_FORGET.match(text))
+
     def handle(self, text: str) -> str | None:
         """FRIDAY's reply if this is a memory command, else None."""
         fact = self._fact(text)

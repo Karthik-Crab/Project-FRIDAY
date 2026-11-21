@@ -11,6 +11,8 @@ import base64
 import contextlib
 import logging
 import re
+import shutil
+import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
@@ -135,8 +137,12 @@ class AppServices:
         can_think: bool = False,
         song_ai: SongEditor | None = None,
         vocals: VocalSplitter | None = None,
+        helper_folders: Sequence[Path] = (),
     ) -> None:
         self.store = store
+        # Where ComfyUI and ACE-Step keep their own copies of what they were given
+        # and what they made. Cleaned after each job of an incognito chat.
+        self.helper_folders = tuple(helper_folders)
         self.uploads_dir = uploads_dir
         self.audio_dir = audio_dir or (uploads_dir.parent / "edited" if uploads_dir else None)
         self.ffmpeg = ffmpeg
@@ -202,18 +208,89 @@ class AppServices:
 
     # Conversations
 
-    def conversation_id(self, conversation_id: str | None) -> str:
+    def conversation_id(self, conversation_id: str | None, incognito: bool = False) -> str:
         """The conversation to use: the given one, or a new one."""
         if conversation_id and self.store.get(conversation_id):
             return conversation_id
-        conv = self.store.create()
+        conv = self.store.create(incognito=incognito)
         self.emit({"type": "conversation", "conversation": conv.to_json()})
         return conv.id
 
     def delete_conversation(self, conversation_id: str) -> None:
+        conv = self.store.get(conversation_id)
+        messages = self.store.messages(conversation_id) if conv and conv.incognito else []
+        for message in messages:  # a job finishing later would leave a file behind
+            job = self._jobs.get(message.id)
+            if job is not None:
+                job.cancel()
         self._engines.pop(conversation_id, None)
         self.store.delete(conversation_id)
+        if conv and conv.incognito:
+            self._wipe_incognito(conversation_id, messages)
         self.emit({"type": "conversation_deleted", "id": conversation_id})
+
+    def _wipe_after(self, job_id: int, begun_loop: float) -> None:
+        """After a card job: the helper programs' copies go if the chat is incognito."""
+        message = self.store.message(job_id)
+        if message is None:
+            return
+        loop = asyncio.get_running_loop()
+        ended = time.time()
+        begun = ended - (loop.time() - begun_loop)
+        self._wipe_helper_copies(message.conversation_id, begun, ended)
+
+    def is_incognito(self, conversation_id: str) -> bool:
+        conv = self.store.get(conversation_id)
+        return bool(conv and conv.incognito)
+
+    def _private_folder(self, conversation_id: str) -> Path | None:
+        """Where an incognito chat's finished files go (never Pictures or Music)."""
+        if self.uploads_dir is None:
+            return None
+        return self.uploads_dir.parent / "incognito" / conversation_id
+
+    def _finished_file(self, job_id: int, path: Path) -> Path:
+        """A job's file, moved into the private folder if its chat is incognito."""
+        message = self.store.message(job_id)
+        if message is None or not self.is_incognito(message.conversation_id):
+            return path
+        folder = self._private_folder(message.conversation_id)
+        if folder is None:
+            return path
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / path.name
+        shutil.move(path, target)
+        return target
+
+    def _wipe_helper_copies(self, conversation_id: str, begun: float, ended: float) -> None:
+        """Delete what ComfyUI and ACE-Step saved during one incognito job.
+
+        Jobs on the graphics card run one at a time, so the files those programs
+        wrote between ``begun`` and ``ended`` belong to this job alone.
+        """
+        if not self.is_incognito(conversation_id):
+            return
+        for folder in self.helper_folders:
+            if not folder.is_dir():
+                continue
+            for path in folder.rglob("*"):
+                with contextlib.suppress(OSError):
+                    if path.is_file() and begun - 1 <= path.stat().st_mtime <= ended + 1:
+                        path.unlink()
+
+    def _wipe_incognito(self, conversation_id: str, messages: list[StoredMessage]) -> None:
+        """Remove every file an incognito chat left: attachments and results."""
+        for message in messages:
+            if message.file:
+                with contextlib.suppress(OSError):
+                    Path(message.file).unlink(missing_ok=True)
+            for item in message.meta.get("files") or []:
+                upload_id = str(item.get("id", ""))
+                if self.uploads_dir is not None and _UPLOAD_ID.match(upload_id):
+                    shutil.rmtree(self.uploads_dir / upload_id, ignore_errors=True)
+        folder = self._private_folder(conversation_id)
+        if folder is not None:
+            shutil.rmtree(folder, ignore_errors=True)
 
     def rename(self, conversation_id: str, title: str) -> None:
         title = " ".join(title.split())[:80] or NEW_TITLE
@@ -233,6 +310,7 @@ class AppServices:
         if engine is None:
             engine = self._make_engine(conversation_id)
             engine.app_note = self._files_note()
+            engine.incognito = self.is_incognito(conversation_id)
             _load_history(engine, self.store.messages(conversation_id), self._history_text)
         self._engines[conversation_id] = engine  # newest last
         while len(self._engines) > _MAX_ENGINES:
@@ -603,7 +681,10 @@ class AppServices:
             )
 
         try:
-            notice = await self.studio.make(Request(kind, prompt), on_start=started)
+            try:
+                notice = await self.studio.make(Request(kind, prompt), on_start=started)
+            finally:
+                self._wipe_after(job_id, begun)
         except asyncio.CancelledError:
             self._emit_message(
                 self.store.update(job_id, meta={"status": "cancelled"}), "message_update"
@@ -621,7 +702,7 @@ class AppServices:
         if notice.ok and notice.log_path is not None:
             done = self.store.update(
                 job_id,
-                file=str(notice.log_path),
+                file=str(self._finished_file(job_id, notice.log_path)),
                 meta={"status": "done", "seconds": round(seconds)},
             )
             said = f"I made the {spoken}: {prompt}."
@@ -735,7 +816,7 @@ class AppServices:
         else:
             done = self.store.update(
                 job_id,
-                file=str(target),
+                file=str(self._finished_file(job_id, target)),
                 meta={
                     "status": "done",
                     "seconds": round(loop.time() - begun),
@@ -777,7 +858,7 @@ class AppServices:
         else:
             done = self.store.update(
                 job_id,
-                file=str(target),
+                file=str(self._finished_file(job_id, target)),
                 meta={
                     "status": "done",
                     "seconds": round(loop.time() - begun),
@@ -822,7 +903,10 @@ class AppServices:
             )
 
         try:
-            made = await self.studio.edit_picture(picture.path, words, on_start=started)
+            try:
+                made = await self.studio.edit_picture(picture.path, words, on_start=started)
+            finally:
+                self._wipe_after(job_id, begun)
             target = image_edit.output_name(picture.path, made.parent)
             made.replace(target)
         except asyncio.CancelledError:
@@ -836,7 +920,7 @@ class AppServices:
         else:
             done = self.store.update(
                 job_id,
-                file=str(target),
+                file=str(self._finished_file(job_id, target)),
                 meta={
                     "status": "done",
                     "seconds": round(loop.time() - begun),
@@ -902,7 +986,10 @@ class AppServices:
 
         try:
             if self.studio is not None:
-                target = await self.studio.exclusive(work, on_start=started)
+                try:
+                    target = await self.studio.exclusive(work, on_start=started)
+                finally:
+                    self._wipe_after(job_id, begun)
             else:
                 target = await work()
         except asyncio.CancelledError:
@@ -916,7 +1003,7 @@ class AppServices:
         else:
             done = self.store.update(
                 job_id,
-                file=str(target),
+                file=str(self._finished_file(job_id, target)),
                 meta={"status": "done", "seconds": round(loop.time() - begun)},
             )
         self._emit_message(done, "message_update")

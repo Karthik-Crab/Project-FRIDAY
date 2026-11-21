@@ -79,6 +79,20 @@ def _delegate(config: FridayConfig, notes: NoteBook | None) -> CodeDelegate | No
     )
 
 
+def _helper_folders(config: FridayConfig) -> list[Path]:
+    """Where ComfyUI and ACE-Step keep their own copies of files: found from how
+    they are started (ComfyUI's main.py, ACE-Step's project folder)."""
+    folders: list[Path] = []
+    for arg in config.studio.comfyui_command:
+        if Path(arg).name == "main.py":
+            root = Path(arg).expanduser().parent
+            folders += [root / "input", root / "output", root / "temp"]
+    ace = config.song_ai.env.get("ACESTEP_PROJECT_ROOT") if config.song_ai.enabled else None
+    if ace:
+        folders.append(Path(ace).expanduser() / ".cache" / "acestep" / "tmp")
+    return folders
+
+
 def _studio(config: FridayConfig, router: ProviderRouter) -> StudioDelegate | None:
     st = config.studio
     if not st.enabled:
@@ -793,6 +807,7 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
         can_think=any(p.think is not None for p in config.providers.values()),
         song_ai=_song_ai(config, here, ffmpeg),
         vocals=_vocals(config),
+        helper_folders=_helper_folders(config),
     )
     port = config.app.port
     server = uvicorn.Server(

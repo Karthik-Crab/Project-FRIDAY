@@ -240,7 +240,7 @@ function renderList() {
     a.title = c.title;
     const live = state.status.voice !== "off" && state.status.voice_conversation === c.id;
     a.innerHTML = `${live ? '<span class="live" title="Voice is on in this chat"></span>' : ""}
-      <span class="conv-title">${esc(c.title)}</span>
+      ${c.incognito ? '<span class="conv-incognito" title="Incognito chat">🕶</span>' : ""}<span class="conv-title">${esc(c.title)}</span>
       <span class="conv-actions">
         <button class="mini-btn" data-act="rename" title="Rename">✎</button>
         <button class="mini-btn" data-act="delete" title="Delete">🗑</button>
@@ -263,26 +263,49 @@ async function renameConversation(c) {
 }
 
 async function deleteConversation(c) {
-  if (!confirm(`Delete “${c.title}”? Pictures, music and changed songs stay saved on the computer.`)) return;
+  const warning = c.incognito
+    ? `Delete the incognito chat “${c.title}”? Everything in it is removed for good: messages, attached files, pictures and songs made in it.`
+    : `Delete “${c.title}”? Pictures, music and changed songs stay saved on the computer.`;
+  if (!confirm(warning)) return;
   await api(`/api/conversations/${c.id}`, { method: "DELETE" });
 }
 
-async function openConversation(id) {
+function showIncognito(on) {
+  $("incognito-note").classList.toggle("hidden", !on);
+  document.body.classList.toggle("incognito", on);
+}
+
+// A new chat on the computer (incognito if "New incognito chat" was pressed).
+async function newConversation() {
+  const conv = await api("/api/conversations", {
+    method: "POST",
+    body: JSON.stringify({ incognito: Boolean(state.nextIncognito) }),
+  });
+  upsertConversation(conv);
+  await openConversation(conv.id);
+  return conv.id;
+}
+
+async function openConversation(id, incognito = false) {
   state.current = id;
+  state.nextIncognito = !id && incognito;
+  showIncognito(!id && incognito);
   state.messages.clear();
   clearWaiting();
   for (const d of state.drafts.values()) stopWaitingTimer(d);
   state.drafts.clear();
   els.messages.innerHTML = "";
   if (!id) {
-    els.title.textContent = "New chat";
+    els.title.textContent = incognito ? "New incognito chat" : "New chat";
     if (location.hash) history.replaceState(null, "", location.pathname);
   } else {
     if (location.hash !== `#/c/${id}`) history.replaceState(null, "", `#/c/${id}`);
+    showIncognito(Boolean(state.conversations.find((c) => c.id === id)?.incognito));
     try {
       const data = await api(`/api/conversations/${id}`);
       if (state.current !== id) return;
       els.title.textContent = data.conversation.title;
+      showIncognito(Boolean(data.conversation.incognito));
       for (const m of data.messages) putMessage(m);
     } catch {
       toast("That chat no longer exists.");
@@ -578,12 +601,7 @@ function renderTray() {
 // A new chat gets its id from the server; then the page shows it.
 async function sendWithConversation(message) {
   let id = state.current;
-  if (!id) {
-    const conv = await api("/api/conversations", { method: "POST" });
-    upsertConversation(conv);
-    await openConversation(conv.id);
-    id = conv.id;
-  }
+  if (!id) id = await newConversation();
   return send({ ...message, conversation_id: id });
 }
 
@@ -653,11 +671,7 @@ function showVoiceState(st) {
 async function toggleVoice() {
   const on = state.status.voice !== "on";
   try {
-    if (on && !state.current) {
-      const conv = await api("/api/conversations", { method: "POST" });
-      upsertConversation(conv);
-      await openConversation(conv.id);
-    }
+    if (on && !state.current) await newConversation();
     const reply = await send({ type: "voice", on, conversation_id: state.current });
     if (on && reply.conversation_id && reply.conversation_id !== state.current) openConversation(reply.conversation_id);
   } catch (e) { toast(e.message); }
@@ -676,6 +690,7 @@ els.input.addEventListener("keydown", (e) => {
 els.input.addEventListener("input", autosize);
 for (const b of document.querySelectorAll(".mode")) b.addEventListener("click", () => setMode(b.dataset.mode));
 $("new-chat").addEventListener("click", () => { openConversation(null); els.sidebar.classList.remove("open"); });
+$("new-incognito").addEventListener("click", () => { openConversation(null, true); els.sidebar.classList.remove("open"); });
 $("open-sidebar").addEventListener("click", () => els.sidebar.classList.add("open"));
 $("close-sidebar").addEventListener("click", () => els.sidebar.classList.remove("open"));
 els.voice.addEventListener("click", toggleVoice);
