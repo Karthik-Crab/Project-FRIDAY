@@ -12,6 +12,9 @@ from friday.core.messages import ChatRequest, Message, Role
 from friday.llm.base import ProviderInfo
 from friday.llm.providers._http import DEFAULT_TIMEOUT, iter_ndjson, raise_for_status
 
+# Room for the thinking, which counts against the reply's length limit.
+THINKING_TOKENS = 4096
+
 
 class OllamaProvider:
     def __init__(
@@ -41,6 +44,9 @@ class OllamaProvider:
         return self._info
 
     async def stream(self, request: ChatRequest) -> AsyncGenerator[str, None]:
+        # A request may switch thinking on or off, but only for a model set up
+        # with ``think`` (others refuse the field).
+        think = self._think if request.think is None or self._think is None else request.think
         payload = {
             "model": self._info.model,
             "stream": True,
@@ -49,12 +55,12 @@ class OllamaProvider:
             + [_message(m) for m in request.messages],
             "options": {
                 "temperature": request.temperature,
-                "num_predict": request.max_tokens,
+                "num_predict": request.max_tokens + (THINKING_TOKENS if think else 0),
                 **self._load_options(),
             },
         }
-        if self._think is not None:
-            payload["think"] = self._think
+        if think is not None:
+            payload["think"] = think
         try:
             async with self._client.stream("POST", "/api/chat", json=payload) as response:
                 if response.status_code >= 400:

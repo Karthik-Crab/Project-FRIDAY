@@ -95,12 +95,14 @@ class AppServices:
         ffmpeg: str | None = None,
         can_see: bool = False,
         document_chars: int = 14_000,
+        can_think: bool = False,
     ) -> None:
         self.store = store
         self.uploads_dir = uploads_dir
         self.audio_dir = audio_dir or (uploads_dir.parent / "edited" if uploads_dir else None)
         self.ffmpeg = ffmpeg
         self.can_see = can_see
+        self.can_think = can_think
         self.document_chars = document_chars
         self._make_engine = make_engine
         self.studio = studio
@@ -148,6 +150,7 @@ class AppServices:
             "voice": self.voice.state if self.voice else "off",
             "voice_conversation": self.voice.conversation_id if self.voice else None,
             "can_attach": self.uploads_dir is not None,
+            "can_think": self.can_think,
             "can_read": {
                 "image": self.can_see,
                 "document": True,
@@ -201,14 +204,21 @@ class AppServices:
 
     # Chat
 
-    async def chat(self, conversation_id: str | None, text: str, files: Sequence[str] = ()) -> str:
+    async def chat(
+        self,
+        conversation_id: str | None,
+        text: str,
+        files: Sequence[str] = (),
+        think: bool | None = None,
+    ) -> str:
+        """``think``: let the talking model think before it answers (None: as set up)."""
         text = text.strip()
         uploads = [self.upload(f) for f in files]
         cid = self.conversation_id(conversation_id)
         if not text and not uploads:
             return cid
         if uploads:
-            return await self._chat_with_files(cid, text, uploads)
+            return await self._chat_with_files(cid, text, uploads, think)
         self._title_from(cid, text)
         self._emit_message(self.store.add(cid, "user", "text", text))
         request = parse_request(text) if self.studio else None
@@ -224,12 +234,15 @@ class AppServices:
             self._emit_message(offer)
             self._remember(cid, text, f"(offered to make the {_SPOKEN[request.kind.value]})")
             return cid
-        await self._stream_reply(cid, text)
+        await self._stream_reply(cid, text, think=think)
         return cid
 
-    async def _stream_reply(self, cid: str, text: str, images: Sequence[str] = ()) -> None:
+    async def _stream_reply(
+        self, cid: str, text: str, images: Sequence[str] = (), think: bool | None = None
+    ) -> None:
         async with self._lock(cid):
             engine = self.engine(cid)
+            engine.think = think if self.can_think else None
             draft = f"d{uuid.uuid4().hex[:12]}"
             self.emit({"type": "stream_start", "conversation_id": cid, "draft": draft})
             async for delta in engine.respond(text, images):
@@ -249,7 +262,9 @@ class AppServices:
         self._emit_message(self.store.add(cid, "assistant", "text", reply))
         self._remember(cid, said, reply)
 
-    async def _chat_with_files(self, cid: str, text: str, uploads: list[Upload]) -> str:
+    async def _chat_with_files(
+        self, cid: str, text: str, uploads: list[Upload], think: bool | None = None
+    ) -> str:
         kinds = {u.category for u in uploads}
         if not text:
             text = (
@@ -288,7 +303,7 @@ class AppServices:
         for picture in (u for u in uploads if u.category == "image"):
             data = await asyncio.to_thread(picture.path.read_bytes)
             images.append(base64.b64encode(data).decode("ascii"))
-        await self._stream_reply(cid, said, images)
+        await self._stream_reply(cid, said, images, think)
         return cid
 
     def notice(self, conversation_id: str, text: str, context: str) -> None:

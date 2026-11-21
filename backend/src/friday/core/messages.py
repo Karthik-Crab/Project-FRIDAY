@@ -37,4 +37,6 @@ class ChatRequest:
     messages: tuple[Message, ...]
     max_tokens: int = 1024
     temperature: float = 0.7
+    # Think before answering (models that can, e.g. Qwen3). None: as configured.
+    think: bool | None = None
     metadata: dict[str, str] = field(default_factory=dict)

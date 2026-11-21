@@ -9,6 +9,7 @@ const els = {
   voiceStatus: $("voice-status"), voicePartial: $("voice-partial"), models: $("models"),
   sidebar: $("sidebar"), toast: $("toast"), chips: $("chips"), hint: $("hint"),
   tray: $("tray"), attach: $("attach"), fileInput: $("file-input"), drop: $("drop"),
+  think: $("think-toggle"),
 };
 
 const state = {
@@ -23,7 +24,13 @@ const state = {
   nextRequest: 1,
   timers: new Map(),
   attachments: [],        // files picked for the next message: {key, id, name, category, uploading, preview}
+  think: loadThink(),     // let the talking model think before answering
+  waiting: null,          // "FRIDAY is working" bubble shown until the reply starts: {el, label, start, timer}
 };
+
+function loadThink() {
+  try { return localStorage.getItem("friday.think") === "on"; } catch { return false; }
+}
 
 const SPOKEN = { image: "picture", music: "music", audio_edit: "song" };
 const ICON = { image: "🖼", audio: "🎵", document: "📄" };
@@ -165,6 +172,7 @@ function onEvent(ev) {
       break;
     case "message":
     case "message_update":
+      if (ev.type === "message" && ev.message.role === "assistant") clearWaiting();
       touch(ev.message.conversation_id);
       if (ev.message.conversation_id === state.current) putMessage(ev.message);
       break;
@@ -179,6 +187,7 @@ function onEvent(ev) {
     case "delta": {
       const d = state.drafts.get(ev.draft);
       if (d) {
+        if (!d.text) { stopWaitingTimer(d); d.body.classList.add("cursor"); }
         d.text += ev.text;
         d.body.innerHTML = markdown(d.text);
         scrollDown();
@@ -186,6 +195,7 @@ function onEvent(ev) {
       break;
     }
     case "stream_end": {
+      stopWaitingTimer(state.drafts.get(ev.draft));
       const d = state.drafts.get(ev.draft);
       state.drafts.delete(ev.draft);
       d?.el.remove();
@@ -254,6 +264,8 @@ async function deleteConversation(c) {
 async function openConversation(id) {
   state.current = id;
   state.messages.clear();
+  clearWaiting();
+  for (const d of state.drafts.values()) stopWaitingTimer(d);
   state.drafts.clear();
   els.messages.innerHTML = "";
   if (!id) {
@@ -386,12 +398,64 @@ function renderJob(el, m) {
   return el;
 }
 
-function startDraft(id) {
+function waitingHtml(label) {
+  return `<span class="typing" aria-label="FRIDAY is working"><i></i><i></i><i></i></span>`
+    + `<span class="wait-label">${esc(label)}</span><span class="wait-time"></span>`;
+}
+
+// A bubble with moving dots, shown from sending until the first words arrive.
+function showWaiting(label) {
+  clearWaiting();
   const el = document.createElement("div");
-  el.className = "msg assistant";
-  el.innerHTML = `<div class="body cursor"></div>`;
+  el.className = "msg assistant waiting";
+  el.innerHTML = `<div class="body">${waitingHtml(label)}</div>`;
   els.messages.appendChild(el);
-  state.drafts.set(id, { el, body: el.querySelector(".body"), text: "" });
+  state.waiting = { el, label, start: Date.now(), timer: null };
+  startWaitingTimer(state.waiting);
+  updateEmpty();
+  scrollDown(true);
+}
+
+function clearWaiting() {
+  if (!state.waiting) return;
+  stopWaitingTimer(state.waiting);
+  state.waiting.el.remove();
+  state.waiting = null;
+}
+
+// After a few seconds, show how long it has been, so a slow answer doesn't look stuck.
+function startWaitingTimer(w) {
+  w.timer = setInterval(() => {
+    const s = Math.round((Date.now() - w.start) / 1000);
+    const t = w.el.querySelector(".wait-time");
+    if (t && s >= 3) t.textContent = ` ${s} s`;
+  }, 1000);
+}
+
+function stopWaitingTimer(w) {
+  if (w && w.timer) { clearInterval(w.timer); w.timer = null; }
+}
+
+function startDraft(id) {
+  // Keep the waiting bubble (and its clock) if there is one; the reply goes in it.
+  const w = state.waiting;
+  state.waiting = null;
+  let el, start, label;
+  if (w) {
+    ({ el, start, label } = w);
+    stopWaitingTimer(w);
+    el.classList.remove("waiting");
+  } else {
+    el = document.createElement("div");
+    el.className = "msg assistant";
+    start = Date.now();
+    label = "";
+    el.innerHTML = `<div class="body">${waitingHtml(label)}</div>`;
+    els.messages.appendChild(el);
+  }
+  const d = { el, body: el.querySelector(".body"), text: "", start, timer: null };
+  startWaitingTimer(d);
+  state.drafts.set(id, d);
   updateEmpty();
   scrollDown(true);
 }
@@ -411,12 +475,22 @@ async function submit(text) {
   try {
     let reply;
     if (mode === "chat") {
-      reply = await sendWithConversation({ type: "chat", text, files: files.map((a) => a.id) });
+      const kinds = files.map((a) => a.category);
+      const think = state.think && state.status.can_think;
+      if (!kinds.includes("audio")) {
+        showWaiting(
+          kinds.includes("image") ? "Looking at the picture…"
+            : kinds.includes("document") ? "Reading the document…"
+            : think ? "Thinking…" : "",
+        );
+      }
+      reply = await sendWithConversation({ type: "chat", text, files: files.map((a) => a.id), think });
     } else {
       reply = await sendWithConversation({ type: "make", kind: mode, prompt: text });
     }
     return reply;
   } catch (e) {
+    clearWaiting();
     toast(e.message);
     if (!els.input.value) { els.input.value = text; autosize(); }
     if (!state.attachments.length && files.length) { state.attachments = files; renderTray(); }
@@ -486,6 +560,15 @@ async function sendWithConversation(message) {
   return send({ ...message, conversation_id: id });
 }
 
+function renderThink() {
+  const show = !!state.status.can_think && state.mode === "chat";
+  els.think.classList.toggle("hidden", !show);
+  els.think.setAttribute("aria-pressed", state.think ? "true" : "false");
+  els.think.title = state.think
+    ? "Thinking is on: FRIDAY thinks before answering (slower, better for hard questions). Click to turn off."
+    : "Thinking is off: FRIDAY answers straight away. Click to let her think first.";
+}
+
 function setMode(mode) {
   if (mode !== "chat" && !state.status.can_make.includes(mode)) {
     toast(`Making ${SPOKEN[mode]} isn't set up on this computer.`);
@@ -493,6 +576,7 @@ function setMode(mode) {
   }
   state.mode = mode;
   for (const b of document.querySelectorAll(".mode")) b.classList.toggle("active", b.dataset.mode === mode);
+  renderThink();
   els.input.placeholder = PLACEHOLDER[mode];
   els.hint.textContent = mode === "chat"
     ? "Enter to send · Shift+Enter for a new line"
@@ -515,7 +599,13 @@ function applyStatus(s) {
     b.classList.toggle("hidden", m !== "chat" && !s.can_make.includes(m));
   }
   if (state.mode !== "chat" && !s.can_make.includes(state.mode)) setMode("chat");
-  els.models.innerHTML = (s.models || []).map((m) => `<div title="${esc(m.model)}">● ${esc(m.label)}</div>`).join("");
+  els.models.innerHTML = (s.models || []).map((m) =>
+    `<div class="model" title="${esc(m.model)}${m.where ? " · " + esc(m.where) : ""}">`
+    + (m.role ? `<span class="model-role">${esc(m.role)}</span>` : "")
+    + `<span class="model-name">${esc(m.label)}</span>`
+    + (m.where ? `<span class="model-where">${esc(m.where)}</span>` : "")
+    + `</div>`).join("");
+  renderThink();
   els.voice.disabled = !s.voice_available || s.voice === "starting" || s.voice === "stopping";
   els.voice.title = s.voice_available ? "Talk to FRIDAY" : "Voice mode isn't set up";
   const on = s.voice === "on";
@@ -558,6 +648,14 @@ $("new-chat").addEventListener("click", () => { openConversation(null); els.side
 $("open-sidebar").addEventListener("click", () => els.sidebar.classList.add("open"));
 $("close-sidebar").addEventListener("click", () => els.sidebar.classList.remove("open"));
 els.voice.addEventListener("click", toggleVoice);
+els.think.addEventListener("click", () => {
+  state.think = !state.think;
+  try { localStorage.setItem("friday.think", state.think ? "on" : "off"); } catch { /* not kept */ }
+  renderThink();
+  toast(state.think
+    ? "Thinking on: FRIDAY thinks before answering. Better for hard questions, but slower."
+    : "Thinking off: FRIDAY answers straight away.");
+});
 els.attach.addEventListener("click", () => els.fileInput.click());
 els.fileInput.addEventListener("change", () => { attachFiles([...els.fileInput.files]); els.fileInput.value = ""; });
 els.input.addEventListener("paste", (e) => {

@@ -29,7 +29,7 @@ from friday.config import FridayConfig, default_config_path, load_config
 from friday.conversation.delegation import CodeDelegate
 from friday.conversation.engine import ConversationEngine
 from friday.conversation.notes import NoteBook
-from friday.conversation.studio import StudioDelegate
+from friday.conversation.studio import Kind, StudioDelegate
 from friday.core.errors import ConfigError, FridayError
 from friday.core.logging import configure_logging
 from friday.core.messages import ChatRequest
@@ -591,6 +591,52 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
     await session.run()
 
 
+def _model_list(
+    config: FridayConfig, router: ProviderRouter, studio: StudioDelegate | None
+) -> list[dict[str, str]]:
+    """Every model the app uses, with what it is for and where it runs."""
+    card = {*config.studio.gpu_providers, *config.studio.gpu_occasional}
+    chat = [n for n in config.routes.get("conversation", []) if n in router.providers]
+    vision = config.routes.get("vision", [])
+    out = []
+    for name, provider in router.providers.items():
+        if chat and name == chat[0]:
+            role = "Chat"
+        elif name in chat:
+            role = "Chat when the card is busy" + (", reads pictures" if name in vision else "")
+        elif name in vision:
+            role = "Reads pictures"
+        else:
+            role = "Other"
+        where = (
+            "graphics card" if name in card else "processor" if provider.info.local else "online"
+        )
+        out.append({"role": role, "label": provider.info.model, "where": where})
+    out.sort(key=lambda row: row["role"] != "Chat")  # the main talking model first
+    s = config.studio
+    if studio is not None and Kind.IMAGE in studio.workflows:
+        label = Path(s.image_checkpoint).stem if not s.image_workflow else "your workflow"
+        out.append({"role": "Makes pictures", "label": label, "where": "graphics card, ComfyUI"})
+    if studio is not None and Kind.MUSIC in studio.workflows:
+        label = Path(s.music_checkpoint).stem if s.music_checkpoint else "your workflow"
+        out.append({"role": "Makes music", "label": label, "where": "graphics card, ComfyUI"})
+    v = config.voice
+    if v.tts_server_url:
+        command = " ".join(v.tts_server_command).lower()
+        label = (
+            "Chatterbox"
+            if "chatterbox" in command or "chatterbox" in v.tts_server_url
+            else ("voice service")
+        )
+        out.append({"role": "Voice", "label": label, "where": "graphics card, only while on"})
+    if v.tts_server_url or v.tts_model_path:
+        where = "graphics card" if v.stt_device == "cuda" else "processor"
+        out.append({"role": "Hearing", "label": f"Whisper {v.stt_model}", "where": where})
+    for row in out:
+        row["model"] = row["label"]
+    return out
+
+
 async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool) -> None:
     """The chat app in the browser: chats, pictures, music and voice."""
     try:
@@ -651,21 +697,7 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
         router=router,
         gpu_providers=config.studio.gpu_providers,
     )
-    card = set(config.studio.gpu_providers)
-    models = [
-        {
-            "label": f"{p.info.model} · "
-            + (
-                "graphics card"
-                if name in card or name in config.studio.gpu_occasional
-                else "processor"
-                if p.info.local
-                else "online"
-            ),
-            "model": p.info.model,
-        }
-        for name, p in router.providers.items()
-    ]
+    models = _model_list(config, router, studio)
     ffmpeg = find_ffmpeg(config.app.ffmpeg)
     if ffmpeg is None:
         log.warning("ffmpeg not found: changing attached songs is off")
@@ -680,6 +712,7 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
         ffmpeg=ffmpeg,
         can_see=router.has_route("vision"),
         document_chars=config.app.document_chars,
+        can_think=any(p.think is not None for p in config.providers.values()),
     )
     port = config.app.port
     server = uvicorn.Server(

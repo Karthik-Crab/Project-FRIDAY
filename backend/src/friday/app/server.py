@@ -191,8 +191,12 @@ async def _handle(services: AppServices, ws: WebSocket, data: Any) -> None:
             files = data.get("files") or []
             if not isinstance(files, list):
                 raise FridayError("files must be a list")
+            think = data.get("think")
             result["conversation_id"] = await services.chat(
-                cid, str(data.get("text", "")), [str(f) for f in files]
+                cid,
+                str(data.get("text", "")),
+                [str(f) for f in files],
+                think if isinstance(think, bool) else None,
             )
         elif kind == "make":
             proposal = data.get("proposal_id")

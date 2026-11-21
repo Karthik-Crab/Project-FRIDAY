@@ -8,6 +8,7 @@ import math
 import struct
 import wave
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,8 @@ from test_studio import CardModel, FakeComfy, _finish
 from friday.app.server import create_app
 from friday.app.services import AppServices, _safe_name
 from friday.app.store import ConversationStore
+from friday.cli import _model_list
+from friday.config import FridayConfig
 from friday.conversation.engine import PICTURES_NOT_SET_UP, ConversationEngine
 from friday.conversation.studio import Kind, Request, StudioDelegate, Workflow
 from friday.core.messages import ChatRequest, Message, Role
@@ -433,3 +436,89 @@ def test_more_bass_for_real(tmp_path: Path) -> None:
             assert w.getnframes() > 0
         assert client.get(f"/files/{job['id']}").status_code == 200
         assert talk.requests == []
+
+
+# Thinking on or off, and the list of models
+
+
+async def test_thinking_can_be_switched_per_question() -> None:
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, text=json.dumps({"message": {"content": "ok"}, "done": True}))
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://x")
+    qwen = OllamaProvider("gpu", "qwen3", client=client, think=False)
+    gemma = OllamaProvider("local", "gemma3", client=client)  # can't think: never told to
+    ask = ChatRequest(system="s", messages=(Message(Role.USER, "hi"),), max_tokens=100)
+    for provider, think in [(qwen, None), (qwen, True), (gemma, True)]:
+        "".join([d async for d in provider.stream(replace(ask, think=think))])
+    assert seen[0]["think"] is False and seen[0]["options"]["num_predict"] == 100
+    assert seen[1]["think"] is True and seen[1]["options"]["num_predict"] == 4196
+    assert "think" not in seen[2] and seen[2]["options"]["num_predict"] == 100
+
+
+@pytest.mark.parametrize("can_think", [True, False])
+def test_the_app_passes_the_thinking_switch(tmp_path: Path, can_think: bool) -> None:
+    services, talk, eyes = _app(tmp_path)
+    services.can_think = can_think
+    with _client(services) as client, client.websocket_connect("/ws", headers=HOST) as ws:
+        assert client.get("/api/status").json()["can_think"] is can_think
+        ws.send_json({"type": "chat", "text": "hard question", "think": True})
+        _until(ws, "stream_end")
+        ws.send_json({"type": "chat", "text": "easy one"})
+        _until(ws, "stream_end", lambda e: e["message"]["id"] == 4)
+        pic = _upload(client, "fox.png", b"\x89PNG fake")
+        ws.send_json({"type": "chat", "text": "", "files": [pic["id"]], "think": True})
+        _until(ws, "stream_end", lambda e: e["message"]["id"] == 6)
+    assert [r.think for r in talk.requests] == [True if can_think else None, None]
+    assert eyes.requests[0].think is None  # the picture model can't think
+
+
+def test_the_model_list_says_what_each_is_for(tmp_path: Path) -> None:
+    config = FridayConfig.model_validate(
+        {
+            "providers": {
+                "local": {"kind": "ollama", "model": "gemma3-cpu"},
+                "gpu": {"kind": "ollama", "model": "qwen3", "think": False},
+                "vision": {"kind": "ollama", "model": "gemma3:4b"},
+            },
+            "routes": {
+                "conversation": ["gpu", "local"],
+                "vision": ["vision", "local"],
+                "default": ["gpu"],
+                "offline": ["local"],
+            },
+            "studio": {
+                "gpu_providers": ["gpu"],
+                "gpu_occasional": ["vision"],
+                "image_checkpoint": "Juggernaut-XL_v9.safetensors",
+                "music_checkpoint": "ace_step_1.5_turbo_aio.safetensors",
+            },
+            "voice": {
+                "tts_server_url": "http://127.0.0.1:8890",
+                "tts_server_command": ["python", "chatterbox_server.py"],
+            },
+        }
+    )
+    fakes = {}
+    for name, cfg in config.providers.items():
+        fakes[name] = FakeProvider(name)
+        fakes[name]._info = replace(fakes[name].info, model=cfg.model)
+    router = ProviderRouter(fakes, config.routes)
+    studio = StudioDelegate(
+        FakeComfy().client(),
+        {Kind.IMAGE: Workflow({}, {}), Kind.MUSIC: Workflow({}, {})},
+        tmp_path,
+    )
+    rows = [(m["role"], m["label"], m["where"]) for m in _model_list(config, router, studio)]
+    assert rows == [
+        ("Chat", "qwen3", "graphics card"),
+        ("Chat when the card is busy, reads pictures", "gemma3-cpu", "processor"),
+        ("Reads pictures", "gemma3:4b", "graphics card"),
+        ("Makes pictures", "Juggernaut-XL_v9", "graphics card, ComfyUI"),
+        ("Makes music", "ace_step_1.5_turbo_aio", "graphics card, ComfyUI"),
+        ("Voice", "Chatterbox", "graphics card, only while on"),
+        ("Hearing", "Whisper base.en", "processor"),
+    ]

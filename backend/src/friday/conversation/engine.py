@@ -73,6 +73,8 @@ class ConversationEngine:
         self.mode = mode
         self._max_tokens = max_tokens or {Channel.VOICE: 400, Channel.TEXT: 1500}
         self.last_turn = TurnInfo(mode=mode)
+        # Think before answering, for models that can (None: as configured).
+        self.think: bool | None = None
         self.delegate = delegate
         self.notes = notes
         self.studio = studio
@@ -127,6 +129,7 @@ class ConversationEngine:
             messages=self.window.messages,
             max_tokens=self._max_tokens[self.channel],
             temperature=0.8 if self.mode is Mode.COMPANION else 0.4,
+            think=self.think,
         )
 
     def _extra_context(self) -> str | None:
@@ -209,7 +212,7 @@ class ConversationEngine:
             purpose = "vision"
             last = request.messages[-1]
             seen = Message(last.role, last.content, tuple(images))
-            request = replace(request, messages=(*request.messages[:-1], seen))
+            request = replace(request, messages=(*request.messages[:-1], seen), think=None)
         result = StreamResult()
         parts: list[str] = []
         completed = False
