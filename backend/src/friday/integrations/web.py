@@ -97,7 +97,13 @@ def maybe_needs_web(text: str) -> bool:
     text = text.strip()
     if len(text) < 6 or _SMALL_TALK.match(text):
         return False
-    return bool(_FACTUAL.search(text))
+    return bool(_FACTUAL.search(text) or _ABOUT_WEB.search(text))
+
+
+# "try again", "search for it", "you have internet now": the model decides what to look up.
+_ABOUT_WEB = re.compile(
+    r"\b(?:try\s+again|search|internet|online|web|look(?:\s+it)?\s+up|google)\b", re.I
+)
 
 
 @dataclass(frozen=True, slots=True)

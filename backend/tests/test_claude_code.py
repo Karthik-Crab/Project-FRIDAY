@@ -383,3 +383,27 @@ async def test_without_a_coding_agent_she_says_so_in_fixed_words() -> None:
 
     await ask(engine, "What is a rainbow?")
     assert "cannot run Claude Code" in provider.requests[0].system
+
+
+def test_other_ways_of_asking_for_claude_code() -> None:
+    said = "next one can you use claude code and ask it give a simple UI code in html file ?"
+    assert parse_task(said) == "give a simple UI code in html file ?"
+    assert parse_task("use claude code to write a poem") == "write a poem"
+    assert parse_task("let Claude Code check my essay") == "check my essay"
+    # Talking about it is not a task.
+    assert parse_task("did you really ask claude code ?") is None
+    assert parse_task("I love using claude code") is None
+
+
+async def test_the_model_is_told_what_really_went_to_claude_code() -> None:
+    agent = FakeAgent()
+    delegate, engine, provider, _ = setup(agent)
+    _ = [d async for d in engine.respond("did you really ask claude code?")]
+    system = provider.requests[-1].system
+    assert "No task has been sent to Claude Code" in system
+    assert "never say you asked it" in system
+    _ = [d async for d in engine.respond("ask claude code to add a dark mode")]
+    _ = [d async for d in engine.respond("yes")]
+    await asyncio.sleep(0.05)
+    _ = [d async for d in engine.respond("did it work?")]
+    assert '"add a dark mode"' in provider.requests[-1].system

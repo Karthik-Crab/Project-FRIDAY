@@ -61,6 +61,14 @@ INCOGNITO_NO_TASKS = (
 )
 
 
+NO_SEARCH_NOTE = (
+    'No web search was run for this message. Do not write "Web results" and do not '
+    "say you searched, looked up or checked anything online. If this needs current "
+    'information, say you didn\'t search this time and suggest saying "look up" '
+    "followed by what to find."
+)
+
+
 @dataclass(slots=True)
 class TurnInfo:
     """Metadata about the most recent turn, for UI and diagnostics."""
@@ -188,13 +196,28 @@ class ConversationEngine:
                 "nothing ran, so anything you described would be made up."
             )
         name = self.delegate.name
+        sent = self.delegate.sent[-5:]
+        record = (
+            "Tasks really sent to it in this conversation: "
+            + "; ".join(f'"{t[:120]}"' for t in sent)
+            + ". Its answers appear as messages starting with "
+            f'"{name} is done" or "{name} ran into a problem".'
+            if sent
+            else f"No task has been sent to {name} in this conversation."
+        )
+        truth = (
+            f" {record} Messages you answer yourself are NOT sent to {name}: never say you "
+            f"asked it, never write a reply as if it came from {name}, and if asked whether "
+            f"you did, answer from this record. If {self.persona.user_name} wants {name} "
+            f'to do something, tell them to say "ask {name} to" followed by the task.'
+        )
         return (
             f"One exception to the limits above: {name}, a coding agent on this computer, can "
             f"be given tasks. That only happens when {self.persona.user_name} says "
             f'"ask {name} to ..." and then confirms; it is handled for you. Never claim '
             f"{name} did something unless its result appears in this conversation, and "
             "never pretend to do coding work yourself."
-        )
+        ) + truth
 
     def _studio_context(self) -> str:
         user = self.persona.user_name
@@ -247,7 +270,7 @@ class ConversationEngine:
         turn.user_stored = True
         web_note = None
         if self.web is not None and not images:
-            web_note = await self._look_up(user_text, turn)
+            web_note = await self._look_up(user_text, turn) or NO_SEARCH_NOTE
         request = self.build_request(web_note)
         purpose = MODE_PURPOSE[self.mode]
         if images:

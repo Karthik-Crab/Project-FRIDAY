@@ -37,13 +37,25 @@ _NAME = r"(?:claude|claud|cloud|clod|clawed|claudia)(?:[\s-]*(?:code|coat|coda|c
 # Only accepted in the plainest form of the command, "ask ... code to ...".
 _ANY_NAME = r"(?!(?:the|this|that|my|your|our|some|a|an|for|about)\b)[a-z]+[\s-]+code"
 _SEP = r"[\s,.:;!?-]+"
-_LEAD = rf"^\W*(?:(?:hey|ok|okay){_SEP})?(?:friday{_SEP})?(?:please{_SEP})?"
+_LEAD = (
+    rf"^\W*(?:(?:hey|ok|okay|alright|so|now|and|also|then|next(?:{_SEP}one)?|"
+    rf"one{_SEP}more(?:{_SEP}thing)?){_SEP}){{0,3}}(?:friday{_SEP})?(?:please{_SEP})?"
+)
 _DELEGATE = re.compile(
     rf"{_LEAD}(?:(?:can|could|would){_SEP}you{_SEP})?(?:please{_SEP})?"
     rf"(?:(?:ask|tell|get|have){_SEP}{_NAME}"
     rf"|(?:ask|asked|tell){_SEP}{_ANY_NAME}(?={_SEP}to\b)"
     rf"|(?:send|pass|give|forward){_SEP}(?:(?:this|that|it){_SEP})?(?:on{_SEP})?to{_SEP}{_NAME})"
     rf"{_SEP}(?:to{_SEP})?(?P<task>\S.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+# "use Claude Code and ask it to ...", "let Claude Code ...", "can you get Claude
+# Code to ...", "use Claude Code to ...".
+_USE = re.compile(
+    rf"{_LEAD}(?:(?:can|could|would|will){_SEP}you{_SEP})?(?:please{_SEP})?(?:just{_SEP})?"
+    rf"(?:use|try|let|get|have|ask|call|contact|check\s+with){_SEP}{_NAME}{_SEP}"
+    rf"(?:(?:and|then|to){_SEP})?(?:(?:ask|tell|get|have|let){_SEP}(?:it|him|her|them){_SEP})?"
+    rf"(?:to{_SEP})?(?P<task>\S.*)$",
     re.IGNORECASE | re.DOTALL,
 )
 _CANCEL = re.compile(
@@ -87,8 +99,11 @@ def is_no(text: str) -> bool:
 
 
 def parse_task(text: str) -> str | None:
-    match = _DELEGATE.match(text.strip())
-    return match.group("task").strip() if match else None
+    match = _DELEGATE.match(text.strip()) or _USE.match(text.strip())
+    if not match:
+        return None
+    task = match.group("task").strip()
+    return task if len(task.split()) >= 2 else None
 
 
 def is_agent_command(text: str) -> bool:
@@ -137,6 +152,7 @@ class CodeDelegate:
         self.on_done = on_done
         self.name = name
         self.pending: str | None = None  # read back, waiting for "yes"
+        self.sent: list[str] = []  # tasks really sent in this chat
         self.session_id: str | None = None  # follow-ups continue the same session
         self._job: asyncio.Task[None] | None = None
         # Where the session is remembered between runs of FRIDAY, so one Claude
@@ -190,6 +206,7 @@ class CodeDelegate:
         plain = _plain(text)
         if _YES.match(plain):
             task, self.pending = self.pending, None
+            self.sent.append(task)
             self._job = asyncio.get_running_loop().create_task(self._run(task))
             return f"Sent. I'll tell you when {self.name} is done."
         if _NO.match(plain) or _NO_NAME.match(text):

@@ -200,3 +200,18 @@ def test_claude_codes_whole_answer_is_kept_for_the_screen() -> None:
     answer = "Here is the plan:\n\n1. Do this.\n2. Then that.\n\nSPOKEN: The plan has two steps."
     assert without_spoken_line(answer) == "Here is the plan:\n\n1. Do this.\n2. Then that."
     assert spoken_summary(answer) == "The plan has two steps."
+
+
+async def test_without_a_search_the_model_may_not_claim_one(public_dns: None) -> None:
+    web, asked = _searx()
+    engine, seen = _engine(web, "NO")
+    await _say(engine, "i was just testing you, good job")
+    assert asked == []
+    assert "No web search was run for this message" in seen[-1].system
+
+
+async def test_try_again_after_a_search_question_is_checked(public_dns: None) -> None:
+    web, asked = _searx({"https://news.example.org/nobara-44": PAGE})
+    engine, seen = _engine(web, "SEARCH: best family movie 2026")
+    await _say(engine, "try again now. i have given you internet access")
+    assert any("q=best+family+movie+2026" in a for a in asked)
