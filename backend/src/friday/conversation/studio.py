@@ -373,7 +373,7 @@ class StudioDelegate:
                 await self.comfy.interrupt()
                 raise
             finally:
-                await self._give_back(held)
+                await self._give_back(held, release_ram=True)
 
     async def _make(self, request: Request) -> Notice:
         held: list[str] = []
@@ -430,9 +430,9 @@ class StudioDelegate:
                 await unload()
         return held
 
-    async def _give_back(self, held: list[str]) -> None:
+    async def _give_back(self, held: list[str], *, release_ram: bool = False) -> None:
         with contextlib.suppress(Exception):
-            await self.comfy.free()
+            await self.comfy.free(release_ram=release_ram)
         if self.router is None:
             return
         for name in held:

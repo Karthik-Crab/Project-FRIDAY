@@ -66,7 +66,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 body.incognito .topbar { box-shadow: inset 0 -2px 0 var(--muted); }
 .list-label { font-size: 12px; color: var(--muted); padding: 18px 10px 6px; }
-.conv-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.conv-list { flex: 1; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
 .conv {
   display: flex; align-items: center; gap: 4px; padding: 7px 8px 7px 12px; border-radius: 8px;
   color: var(--text); text-decoration: none; font-size: 14px;
@@ -81,7 +81,10 @@ body.incognito .topbar { box-shadow: inset 0 -2px 0 var(--muted); }
   border: 0; background: none; padding: 2px 6px; border-radius: 6px; color: var(--muted); font-size: 13px;
 }
 .mini-btn:hover { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
-.sidebar-foot { font-size: 12px; color: var(--muted); padding: 10px; border-top: 1px solid var(--border); }
+.sidebar-foot {
+  font-size: 12px; color: var(--muted); padding: 10px; border-top: 1px solid var(--border);
+  max-height: 34vh; overflow-y: auto; flex: none; /* the chat list keeps most of the room */
+}
 .model { display: grid; padding: 4px 0; line-height: 1.35; }
 .model + .model { border-top: 1px dashed var(--border); }
 .model-role { font-size: 11px; font-weight: 600; color: var(--text); }

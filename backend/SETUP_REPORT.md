@@ -947,3 +947,32 @@ Installed 2026-11-21 on /mnt/studio (about 18 GB; studio drive 19 GB free after)
   13 GB, so ComfyUI keeps about 5 GB on the graphics card and the rest in RAM
   (peak 7.1 GB of 8 GB on the card). Background changes, night and moon, and a
   white beard all kept the face the same.
+
+## Incognito chats
+
+- **What it does.** "New incognito chat" (left side of the app) starts a chat that
+  FRIDAY keeps out of its memory and can wipe completely.
+  - "Remember that…" and "forget…" are refused with a fixed reply, so
+    memory.md is never written. FRIDAY can still use what it already knew.
+  - Tasks for Claude Code are refused, because Claude Code keeps its own record
+    of every task outside FRIDAY.
+  - Pictures, songs, changed songs and edited pictures go to
+    `~/.config/friday/incognito/<chat id>/`, not `~/Pictures/FRIDAY` or `~/Music/FRIDAY`.
+  - ComfyUI (`input/`, `output/`, `temp/`) and ACE-Step (`.cache/acestep/tmp`)
+    each keep their own copy of every file. FRIDAY deletes those copies right
+    after each incognito job, matched by the time the job ran. FRIDAY finds
+    those folders from `studio.comfyui_command` and `song_ai.env.ACESTEP_PROJECT_ROOT`.
+- **Deleting an incognito chat** removes its messages, attached files, results
+  and private folder. The database is set to overwrite deleted text
+  (`secure_delete`), so the words don't stay in the file.
+- **Not covered.**
+  - ComfyUI's list of recent jobs, which holds the instruction words. It lives
+    in its memory and is gone when ComfyUI stops.
+  - The model's chat cache in Ollama, also memory only.
+  - Copies made by your backup tools, if any.
+- **Picture editor memory.** The editor needs about 22 GB of RAM while it works
+  and used to keep 19 GB afterwards. That ran the 31 GB PC out of memory once,
+  and Linux shut ComfyUI down. After an edit FRIDAY now asks ComfyUI to let go
+  of the RAM too (`free_memory`), and ComfyUI drops to about 6 GB. Picture
+  making still keeps its model in RAM for a quick next start.
+

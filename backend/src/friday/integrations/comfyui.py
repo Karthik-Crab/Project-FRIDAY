@@ -301,12 +301,18 @@ class ComfyClient:
         sub = uploaded.get("subfolder") or ""
         return f"{sub}/{uploaded['name']}" if sub else str(uploaded["name"])
 
-    async def free(self) -> None:
-        """Ask ComfyUI to give the graphics card back. Best effort."""
+    async def free(self, *, release_ram: bool = False) -> None:
+        """Ask ComfyUI to give the graphics card back. Best effort.
+
+        Normally the models stay in RAM (32 GB on the PC), so the next job
+        starts in seconds instead of reading the disk. ``release_ram`` lets
+        go of them too: the picture editor holds about 19 GB, too much to
+        keep while everything else runs.
+        """
         try:
-            # Off the graphics card, but kept in RAM (32 GB on the PC), so
-            # the next job starts in seconds instead of reading the disk.
-            await self._client.post("/free", json={"unload_models": True, "free_memory": False})
+            await self._client.post(
+                "/free", json={"unload_models": True, "free_memory": release_ram}
+            )
         except httpx.HTTPError as exc:
             log.warning("ComfyUI did not free the card: %s", type(exc).__name__)
 

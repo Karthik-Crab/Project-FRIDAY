@@ -139,6 +139,7 @@ def test_deleting_an_incognito_chat_removes_every_file(tmp_path: Path) -> None:
             lambda e: e["message"]["meta"].get("status") in {"done", "failed"},
         )["message"]
         assert done["meta"]["status"] == "done", done["meta"]
+        assert fake.released_ram is True  # the 19 GB editor is let go of after each edit
         result = Path(services.store.message(done["id"]).file or "")
         # Kept in the private folder, not in Pictures; ComfyUI's copy is gone already.
         assert result.parent == tmp_path / "incognito" / secret

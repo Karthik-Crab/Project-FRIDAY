@@ -174,6 +174,7 @@ class FakeComfy:
         self.queued: list[dict[str, Any]] = []
         self.calls: list[str] = []
         self.freed = 0
+        self.released_ram: bool | None = None
         self.interrupted = 0
         self.history_calls = 0
         self.uploaded: list[bytes] = []
@@ -269,8 +270,10 @@ class FakeComfy:
             self.uploaded.append(request.content)
             return httpx.Response(200, json={"name": "friday-pic.png", "subfolder": ""})
         if path == "/free":
-            assert json.loads(request.content) == {"unload_models": True, "free_memory": False}
+            body = json.loads(request.content)
+            assert body["unload_models"] is True
             self.freed += 1
+            self.released_ram = body["free_memory"]
             return httpx.Response(200)
         if path == "/interrupt":
             self.interrupted += 1
@@ -407,6 +410,7 @@ async def test_read_back_yes_makes_the_picture_and_shares_the_card(tmp_path: Pat
     assert opened == [notices[0].log_path]
     # Afterwards the card is freed and the card model comes back.
     assert fake.freed == 1
+    assert fake.released_ram is False  # the picture model stays in RAM for a quick next start
     assert card.warmed == 1
     assert [p.info.name for p in router.candidates("default")] == ["gpu", "local"]
 
