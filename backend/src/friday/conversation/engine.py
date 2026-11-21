@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from friday.conversation.delegation import CodeDelegate, is_agent_command, not_set_up_reply
 from friday.conversation.memory import INTERRUPTED_MARKER, ConversationWindow
 from friday.conversation.notes import NoteBook
+from friday.conversation.studio import StudioDelegate, is_studio_command, parse_request
+from friday.conversation.studio import not_set_up_reply as studio_not_set_up
 from friday.core.errors import ProviderError
 from friday.core.messages import ChatRequest, Role
 from friday.llm.base import ProviderInfo
@@ -59,6 +61,7 @@ class ConversationEngine:
         max_tokens: dict[Channel, int] | None = None,
         delegate: CodeDelegate | None = None,
         notes: NoteBook | None = None,
+        studio: StudioDelegate | None = None,
     ) -> None:
         self.router = router
         self.persona = persona or Persona()
@@ -69,6 +72,7 @@ class ConversationEngine:
         self.last_turn = TurnInfo(mode=mode)
         self.delegate = delegate
         self.notes = notes
+        self.studio = studio
 
     def is_control(self, text: str) -> bool:
         """Answered by FRIDAY's own fixed logic, not by the language model."""
@@ -78,16 +82,24 @@ class ConversationEngine:
             return True
         if self.delegate is None and is_agent_command(text):
             return True
+        if self.studio is not None and self.studio.concerns(text):
+            return True
+        if self.studio is None and is_studio_command(text):
+            return True
         return self.notes is not None and self.notes.concerns(text)
 
     @property
     def awaiting_answer(self) -> bool:
         """FRIDAY asked a yes/no question, so "yes" is an answer, not a murmur."""
+        if self.studio is not None and self.studio.awaiting_answer:
+            return True
         return self.delegate is not None and self.delegate.pending is not None
 
     def dismiss_pending(self) -> None:
         if self.delegate is not None:
             self.delegate.dismiss()
+        if self.studio is not None:
+            self.studio.dismiss()
 
     async def say(self, text: str, context: str | None = None) -> AsyncGenerator[str, None]:
         """Speak something FRIDAY decided to say herself (a finished task).
@@ -115,7 +127,11 @@ class ConversationEngine:
         )
 
     def _extra_context(self) -> str | None:
-        parts = [self._delegate_context(), self.notes.context() if self.notes else None]
+        parts = [
+            self._delegate_context(),
+            self._studio_context(),
+            self.notes.context() if self.notes else None,
+        ]
         return "\n\n".join(p for p in parts if p) or None
 
     def _delegate_context(self) -> str | None:
@@ -133,6 +149,22 @@ class ConversationEngine:
             f'"ask {name} to ..." and then confirms; it is handled for you. Never claim '
             f"{name} did something unless its result appears in this conversation, and "
             "never pretend to do coding work yourself."
+        )
+
+    def _studio_context(self) -> str:
+        user = self.persona.user_name
+        if self.studio is None:
+            return (
+                "You cannot make pictures, images, music or songs. If "
+                f"{user} asks for one, say that it is not set up yet. Never describe a "
+                "picture or song as if you had made it."
+            )
+        return (
+            "Pictures and music can be made on this computer, but only when "
+            f'{user} says "make a picture of ..." or "make a song about ..." and then '
+            "confirms; it is handled for you. If they seem to want one, tell them to say "
+            "that. Never say a picture or song is made, or describe it, unless that "
+            "appears in this conversation."
         )
 
     async def respond(self, user_text: str) -> AsyncGenerator[str, None]:
@@ -169,6 +201,20 @@ class ConversationEngine:
             # Not switched on: say so in fixed words. Left to the model, it
             # claimed to run the task and made up the result.
             reply = not_set_up_reply()
+            turn.was_command = True
+            turn.full_text = reply
+            yield reply
+            return
+
+        if self.studio is not None:
+            reply = self.studio.handle(user_text)
+            if reply is not None:
+                turn.was_command = True
+                turn.full_text = reply
+                yield reply
+                return
+        elif (asked := parse_request(user_text)) is not None:
+            reply = studio_not_set_up(asked.kind)
             turn.was_command = True
             turn.full_text = reply
             yield reply

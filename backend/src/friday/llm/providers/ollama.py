@@ -94,5 +94,14 @@ class OllamaProvider:
         except (httpx.HTTPError, ProviderError):
             pass  # best effort; a real request will report the problem
 
+    async def unload(self) -> None:
+        """Take the model out of memory now (what ``ollama stop`` does). Best effort."""
+        try:
+            await self._client.post(
+                "/api/chat", json={"model": self._info.model, "messages": [], "keep_alive": 0}
+            )
+        except httpx.HTTPError:
+            pass
+
     async def aclose(self) -> None:
         await self._client.aclose()

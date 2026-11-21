@@ -54,6 +54,9 @@ class ProviderRouter:
         self._clock = clock
         self.offline = offline
         self.override: str | None = None
+        # Providers set aside for now, e.g. the graphics-card model while
+        # ComfyUI uses the card. Skipped unless nothing else is left.
+        self._held: set[str] = set()
 
     @property
     def providers(self) -> dict[str, LLMProvider]:
@@ -63,6 +66,19 @@ class ProviderRouter:
         if name is not None and name not in self._providers:
             raise ValueError(f"unknown provider '{name}'")
         self.override = name
+
+    def hold(self, name: str) -> None:
+        """Set a provider aside until ``release``; the next one in the route answers."""
+        if name not in self._providers:
+            raise ValueError(f"unknown provider '{name}'")
+        self._held.add(name)
+
+    def release(self, name: str) -> None:
+        self._held.discard(name)
+
+    @property
+    def held(self) -> frozenset[str]:
+        return frozenset(self._held)
 
     def candidates(self, purpose: str) -> list[LLMProvider]:
         if self.override:
@@ -83,7 +99,10 @@ class ProviderRouter:
             if self._down_until.get(name, 0.0) > now and not self.override:
                 continue
             result.append(provider)
-        return result
+        # A held provider is only skipped while something else can answer:
+        # FRIDAY slower is better than FRIDAY silent.
+        kept = [p for p in result if p.info.name not in self._held]
+        return kept or result
 
     async def stream(
         self, purpose: str, request: ChatRequest, result: StreamResult | None = None

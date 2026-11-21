@@ -8,6 +8,8 @@ friday voice --realtime     speech-to-speech via the OpenAI Realtime API
 friday providers            check which providers are reachable
 friday mic                  live microphone level and speech-detection meter
 friday listen               speech recognition only: prints what was heard
+friday make image "..."     make a picture with ComfyUI now (no read-back)
+friday make music "..."     make music with ComfyUI now
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from friday.config import FridayConfig, default_config_path, load_config
 from friday.conversation.delegation import CodeDelegate
 from friday.conversation.engine import ConversationEngine
 from friday.conversation.notes import NoteBook
+from friday.conversation.studio import StudioDelegate
 from friday.core.errors import ConfigError, FridayError
 from friday.core.logging import configure_logging
 from friday.core.messages import ChatRequest
@@ -72,6 +75,56 @@ def _delegate(config: FridayConfig, notes: NoteBook | None) -> CodeDelegate | No
     )
 
 
+def _studio(config: FridayConfig, router: ProviderRouter) -> StudioDelegate | None:
+    st = config.studio
+    if not st.enabled:
+        return None
+    from friday.conversation.studio import Kind, Workflow
+    from friday.integrations.comfyui import ComfyClient, ComfyLauncher, load_workflow
+    from friday.integrations.workflows import sdxl_text_to_image
+
+    workflows: dict[Kind, Workflow] = {
+        Kind.IMAGE: Workflow(
+            load_workflow(Path(st.image_workflow).expanduser())
+            if st.image_workflow
+            else sdxl_text_to_image(),
+            {
+                "checkpoint": st.image_checkpoint,
+                "width": st.image_width,
+                "height": st.image_height,
+                "steps": st.image_steps,
+                "cfg": st.image_cfg,
+                "negative": st.image_negative,
+            },
+        )
+    }
+    if st.music_workflow:
+        workflows[Kind.MUSIC] = Workflow(
+            load_workflow(Path(st.music_workflow).expanduser()),
+            {"seconds": st.music_seconds, "lyrics": st.music_lyrics},
+        )
+    launcher = None
+    if st.comfyui_command:
+        launcher = ComfyLauncher(
+            st.comfyui_command,
+            log_path=default_config_path().parent / "comfyui.log",
+            start_timeout_s=st.start_timeout_s,
+        )
+    output = (
+        Path(st.output_dir).expanduser() if st.output_dir else Path.home() / "Pictures" / "FRIDAY"
+    )
+    return StudioDelegate(
+        ComfyClient(st.comfyui_url),
+        workflows,
+        output,
+        launcher=launcher,
+        router=router,
+        gpu_providers=st.gpu_providers,
+        timeout_s=st.job_timeout_s,
+        open_results=st.open_results,
+    )
+
+
 def _engine(config: FridayConfig, router: ProviderRouter, channel: Channel) -> ConversationEngine:
     notes = _notes(config)
     return ConversationEngine(
@@ -81,7 +134,32 @@ def _engine(config: FridayConfig, router: ProviderRouter, channel: Channel) -> C
         mode=config.default_mode,
         delegate=_delegate(config, notes),
         notes=notes,
+        studio=_studio(config, router),
     )
+
+
+async def _make(config: FridayConfig, router: ProviderRouter, kind: str, prompt: str) -> int:
+    """Run one picture or music job straight away, without the read-back."""
+    from friday.conversation.studio import Kind, Request
+
+    studio = _studio(config, router)
+    if studio is None:
+        print("Making pictures and music is off. Set enabled = true under [studio].")
+        return 2
+    try:
+        if Kind(kind) not in studio.workflows:
+            print(f"No workflow for {kind} is set up under [studio].")
+            return 2
+        print(f"Making {kind}: {prompt}")
+        begun = asyncio.get_running_loop().time()
+        notice = await studio.make(Request(Kind(kind), prompt))
+        took = asyncio.get_running_loop().time() - begun
+        print(f"{notice.spoken}  [{took:.0f} s]")
+        if notice.log_path is not None:
+            print(f"Saved: {notice.log_path}")
+        return 0 if notice.ok else 1
+    finally:
+        await studio.aclose()
 
 
 async def _read_line(prompt: str, read: Callable[[str], str] = input) -> str:
@@ -129,6 +207,17 @@ async def _chat(config: FridayConfig, router: ProviderRouter) -> None:
             print(f"\n[{notice.spoken}]\n  (full output: {notice.log_path})")
 
         engine.delegate.on_done = show
+    if engine.studio is not None:
+
+        def show_made(notice: object) -> None:
+            from friday.conversation.delegation import Notice
+
+            assert isinstance(notice, Notice)
+            engine.record_notice(notice.spoken, f"(asked for: {notice.task})")
+            saved = f"\n  (saved: {notice.log_path})" if notice.log_path else ""
+            print(f"\n[{notice.spoken}]{saved}")
+
+        engine.studio.on_done = show_made
     print("FRIDAY text chat. /work, /companion, /provider <name|auto>, /quit")
     while True:
         try:
@@ -472,6 +561,18 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
             session.announce(lambda: engine.say(notice.spoken, context))
 
         engine.delegate.on_done = announce
+    if engine.studio is not None:
+
+        def announce_made(notice: object) -> None:
+            from friday.conversation.delegation import Notice
+
+            assert isinstance(notice, Notice)
+            if notice.log_path is not None:
+                print(f"  [saved: {notice.log_path}]")
+            context = f"(asked for: {notice.task})"
+            session.announce(lambda: engine.say(notice.spoken, context))
+
+        engine.studio.on_done = announce_made
     await session.run()
 
 
@@ -491,6 +592,9 @@ def main(argv: list[str] | None = None) -> int:
     listen = sub.add_parser("listen", help="speech recognition only: print what was heard")
     listen.add_argument("--model", default=None, help="try another speech model, e.g. small.en")
     listen.add_argument("--beam", type=int, default=None)
+    make = sub.add_parser("make", help="make a picture or music with ComfyUI now")
+    make.add_argument("kind", choices=["image", "music"])
+    make.add_argument("prompt", help="what to make, in quotes")
     args = parser.parse_args(argv)
 
     try:
@@ -512,6 +616,8 @@ def main(argv: list[str] | None = None) -> int:
             asyncio.run(_mic(config, args.seconds))
         elif args.command == "listen":
             asyncio.run(_listen(config, args.model, args.beam))
+        elif args.command == "make":
+            return asyncio.run(_make(config, router, args.kind, args.prompt))
         else:
             return asyncio.run(_providers(router))
     except (FridayError, ValueError) as exc:

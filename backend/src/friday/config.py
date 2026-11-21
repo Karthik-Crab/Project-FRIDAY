@@ -137,6 +137,52 @@ class MemorySettings(_Strict):
     share_with_claude_code: bool = True
 
 
+def _this_machine_only(name: str, value: str) -> str:
+    url = urlsplit(value)
+    if url.scheme != "http" or url.hostname not in ("127.0.0.1", "localhost", "::1"):
+        raise ValueError(f"{name} must be http://127.0.0.1:<port> (this machine only)")
+    return value
+
+
+class StudioSettings(_Strict):
+    """Optional: make pictures and music with ComfyUI ("make a picture of ...")."""
+
+    enabled: bool = False
+    # ComfyUI has no login, so it must be on this machine.
+    comfyui_url: str = "http://127.0.0.1:8188"
+    # How to start ComfyUI when it is not running, e.g.
+    # ["comfy", "--workspace", "~/ComfyUI", "launch"]. [] = start it yourself.
+    comfyui_command: list[str] = Field(default_factory=list)
+    start_timeout_s: float = Field(default=180.0, ge=10, le=900)
+    job_timeout_s: float = Field(default=600.0, ge=10, le=7200)
+    # Where finished files are saved. "" = Pictures/FRIDAY in your home folder.
+    output_dir: str = ""
+    open_results: bool = True
+    # Talking models on the graphics card: set aside and unloaded during a job
+    # so the card is free for ComfyUI. FRIDAY talks through the next one in
+    # her route meanwhile, so that one should run on the CPU.
+    gpu_providers: list[str] = Field(default_factory=list)
+    # "" = FRIDAY's built-in text-to-image workflow (one SDXL checkpoint).
+    # Otherwise an API-format workflow file with {{prompt}} where the words go.
+    image_workflow: str = ""
+    image_checkpoint: str = "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"
+    image_width: int = Field(default=1024, ge=256, le=2048)
+    image_height: int = Field(default=1024, ge=256, le=2048)
+    image_steps: int = Field(default=30, ge=1, le=150)
+    image_cfg: float = Field(default=4.5, ge=1.0, le=20.0)
+    image_negative: str = "blurry, low quality, deformed, watermark, text"
+    # An API-format workflow file for music, with {{prompt}} (style),
+    # {{lyrics}} and {{seconds}}. "" = no music yet.
+    music_workflow: str = ""
+    music_seconds: int = Field(default=30, ge=5, le=600)
+    music_lyrics: str = "[instrumental]"
+
+    @field_validator("comfyui_url")
+    @classmethod
+    def _comfyui_is_on_this_machine(cls, value: str) -> str:
+        return _this_machine_only("comfyui_url", value)
+
+
 def _default_providers() -> dict[str, ProviderConfig]:
     return {"local": ProviderConfig(kind="ollama", model="llama3.2:3b")}
 
@@ -156,6 +202,7 @@ class FridayConfig(_Strict):
     realtime: RealtimeSettings = Field(default_factory=RealtimeSettings)
     claude_code: ClaudeCodeSettings = Field(default_factory=ClaudeCodeSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
+    studio: StudioSettings = Field(default_factory=StudioSettings)
 
     @model_validator(mode="after")
     def _check_routes(self) -> FridayConfig:
@@ -163,6 +210,9 @@ class FridayConfig(_Strict):
             unknown = [n for n in names if n not in self.providers]
             if unknown:
                 raise ValueError(f"route '{purpose}' uses undefined providers: {unknown}")
+        unknown = [n for n in self.studio.gpu_providers if n not in self.providers]
+        if unknown:
+            raise ValueError(f"studio.gpu_providers uses undefined providers: {unknown}")
         return self
 
 

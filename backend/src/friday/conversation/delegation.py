@@ -71,6 +71,16 @@ def _plain(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", text.lower())).strip()
 
 
+def is_yes(text: str) -> bool:
+    """A spoken "yes" to a read-back question."""
+    return bool(_YES.match(_plain(text)))
+
+
+def is_no(text: str) -> bool:
+    """A spoken "no" to a read-back question."""
+    return bool(_NO.match(_plain(text)))
+
+
 def parse_task(text: str) -> str | None:
     match = _DELEGATE.match(text.strip())
     return match.group("task").strip() if match else None
