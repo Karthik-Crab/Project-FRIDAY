@@ -24,6 +24,7 @@ from friday.conversation.studio import Kind, Request, StudioDelegate, parse_requ
 from friday.core.errors import FridayError
 from friday.core.messages import Role
 from friday.documents import DocumentError, category, extract_text, for_model
+from friday.integrations import image_edit
 from friday.integrations.audio_tools import (
     AudioEdit,
     apply_edit,
@@ -280,6 +281,32 @@ class AppServices:
                         return None
         return None
 
+    @property
+    def can_edit_pictures(self) -> bool:
+        return self.studio is not None and self.studio.edit_workflow is not None
+
+    def _recent_picture(self, cid: str, within: int = 8) -> Upload | None:
+        """The picture the last few messages were about: the newest changed copy,
+        or else the picture as attached. None when the talk has moved on."""
+        for message in list(reversed(self.store.messages(cid)))[:within]:
+            if (
+                message.kind == "job"
+                and message.meta.get("kind") == "image"
+                and message.meta.get("edit")
+                and message.meta.get("status") == "done"
+                and message.file
+                and Path(message.file).is_file()
+            ):
+                path = Path(message.file)
+                return Upload(f"job{message.id}", path.name, "image", path)
+            for f in reversed(message.meta.get("files") or []):
+                if f.get("category") == "image":
+                    try:
+                        return self.upload(str(f["id"]))
+                    except FridayError:
+                        return None
+        return None
+
     def _song_status(self, cid: str) -> str:
         """A true answer to "is it done?" / "where is it?" about the song."""
         jobs = [
@@ -341,6 +368,20 @@ class AppServices:
             self._title_from(cid, text)
             self._emit_message(self.store.add(cid, "user", "text", text))
             self._say(cid, text, self._song_status(cid))
+            return cid
+        picture = self._recent_picture(cid)
+        if picture is not None and image_edit.wants_picture_edit(text):
+            # "now make the sky red" after a picture: change the latest version.
+            return await self._chat_with_files(cid, text, [picture], think)
+        if (
+            picture is None
+            and _PICTURE_WORD.search(text)
+            and image_edit.wants_picture_edit(text)
+            and parse_request(text) is None
+        ):
+            self._title_from(cid, text)
+            self._emit_message(self.store.add(cid, "user", "text", text))
+            self._say(cid, text, image_edit.ATTACH_REPLY)
             return cid
         self._title_from(cid, text)
         self._emit_message(self.store.add(cid, "user", "text", text))
@@ -462,8 +503,19 @@ class AppServices:
         except DocumentError as exc:
             self._say(cid, said, str(exc))
             return cid
+        pictures = [u for u in uploads if u.category == "image"]
+        if pictures and image_edit.wants_picture_edit(text):
+            # Changed by the picture editor, or a plain "can't": never by the
+            # talking model, which can only describe a picture.
+            if not self.can_edit_pictures:
+                self._say(cid, said, image_edit.NOT_SET_UP_REPLY)
+                return cid
+            for picture in pictures:
+                self._start_picture_job(cid, picture, image_edit.instruction(text))
+            self._remember(cid, said, "(changing the picture)")
+            return cid
         images: list[str] = []
-        for picture in (u for u in uploads if u.category == "image"):
+        for picture in pictures:
             data = await asyncio.to_thread(picture.path.read_bytes)
             images.append(base64.b64encode(data).decode("ascii"))
         await self._stream_reply(cid, said, images, think)
@@ -730,6 +782,71 @@ class AppServices:
             )
         self._emit_message(done, "message_update")
         self._remember(done.conversation_id, "(splitting the song)", self._history_text(done))
+
+    def _start_picture_job(self, cid: str, picture: Upload, words: str) -> int:
+        busy = self.studio is not None and self.studio.queued_or_running
+        job = self.store.add(
+            cid,
+            "assistant",
+            "job",
+            words,
+            meta={
+                "kind": "image",
+                "edit": True,
+                "status": "waiting" if busy else "running",
+                "source": picture.id,
+            },
+        )
+        self._emit_message(job)
+        handle = asyncio.get_running_loop().create_task(
+            self._run_picture_job(job.id, picture, words)
+        )
+        self._jobs[job.id] = handle
+        handle.add_done_callback(lambda _: self._jobs.pop(job.id, None))
+        return job.id
+
+    async def _run_picture_job(self, job_id: int, picture: Upload, words: str) -> None:
+        assert self.studio is not None
+        loop = asyncio.get_running_loop()
+        begun = loop.time()
+
+        def started() -> None:
+            nonlocal begun
+            begun = loop.time()
+            self._emit_message(
+                self.store.update(job_id, meta={"status": "running"}), "message_update"
+            )
+
+        try:
+            made = await self.studio.edit_picture(picture.path, words, on_start=started)
+            target = image_edit.output_name(picture.path, made.parent)
+            made.replace(target)
+        except asyncio.CancelledError:
+            self._emit_message(
+                self.store.update(job_id, meta={"status": "cancelled"}), "message_update"
+            )
+            raise
+        except Exception as exc:  # never leave a job spinning
+            log.exception("changing the picture failed")
+            done = self.store.update(job_id, meta={"status": "failed", "error": str(exc)})
+        else:
+            done = self.store.update(
+                job_id,
+                file=str(target),
+                meta={
+                    "status": "done",
+                    "seconds": round(loop.time() - begun),
+                    "note": image_edit.note(),
+                },
+            )
+        self._emit_message(done, "message_update")
+        self._remember(
+            done.conversation_id,
+            "(changing the picture)",
+            "(the changed picture is ready)"
+            if done.meta.get("status") == "done"
+            else "(the picture could not be changed)",
+        )
 
     def wants_song_change(self, conversation_id: str | None, text: str) -> bool:
         """A request typed on the Music tab that is really about the song already

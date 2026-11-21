@@ -204,11 +204,13 @@ class StudioDelegate:
         on_done: Callable[[Notice], None] | None = None,
         opener: Callable[[Path], None] = open_file,
         music_dir: Path | None = None,
+        edit_workflow: Workflow | None = None,
     ) -> None:
         self.comfy = comfy
         self.workflows = dict(workflows)
         self.output_dir = output_dir
         self.music_dir = music_dir or output_dir
+        self.edit_workflow = edit_workflow  # changing an attached picture
         self.launcher = launcher
         self.router = router
         self.gpu_providers = tuple(gpu_providers)
@@ -336,6 +338,40 @@ class StudioDelegate:
             held = await self._take_card()
             try:
                 return await work()
+            finally:
+                await self._give_back(held)
+
+    async def edit_picture(
+        self, source: Path, instruction: str, on_start: Callable[[], None] | None = None
+    ) -> Path:
+        """Change ``source`` as ``instruction`` says; returns the new picture.
+
+        Waits its turn for the graphics card like any other job. Raises
+        FridayError when it can't be done.
+        """
+        if self.edit_workflow is None:
+            raise FridayError("changing pictures is not set up")
+        async with self._card:
+            if on_start is not None:
+                on_start()
+            held: list[str] = []
+            try:
+                if self.launcher is not None:
+                    await self.launcher.ensure_running(self.comfy)
+                elif not await self.comfy.is_up():
+                    raise FridayError("ComfyUI isn't running")
+                held = await self._take_card()
+                image = await self.comfy.upload_image(source)
+                workflow = self.edit_workflow
+                filled = fill_workflow(
+                    workflow.template, {**workflow.values, "prompt": instruction, "image": image}
+                )
+                prompt_id = await self.comfy.queue(filled)
+                files = await self.comfy.wait(prompt_id, self.timeout_s)
+                return await self.comfy.download(files[0], self.output_dir)
+            except asyncio.CancelledError:
+                await self.comfy.interrupt()
+                raise
             finally:
                 await self._give_back(held)
 

@@ -176,6 +176,7 @@ class FakeComfy:
         self.freed = 0
         self.interrupted = 0
         self.history_calls = 0
+        self.uploaded: list[bytes] = []
         self.release = asyncio.Event()
         self.release.set()
 
@@ -264,6 +265,9 @@ class FakeComfy:
             return httpx.Response(
                 200, content=b"\x89PNG fake " + request.url.params["filename"].encode()
             )
+        if path == "/upload/image" and request.method == "POST":
+            self.uploaded.append(request.content)
+            return httpx.Response(200, json={"name": "friday-pic.png", "subfolder": ""})
         if path == "/free":
             assert json.loads(request.content) == {"unload_models": True, "free_memory": False}
             self.freed += 1

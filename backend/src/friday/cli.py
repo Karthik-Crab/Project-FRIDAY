@@ -85,7 +85,11 @@ def _studio(config: FridayConfig, router: ProviderRouter) -> StudioDelegate | No
         return None
     from friday.conversation.studio import Kind, Workflow
     from friday.integrations.comfyui import ComfyClient, ComfyLauncher, load_workflow
-    from friday.integrations.workflows import ace_step_music, sdxl_text_to_image
+    from friday.integrations.workflows import (
+        ace_step_music,
+        qwen_image_edit,
+        sdxl_text_to_image,
+    )
 
     workflows: dict[Kind, Workflow] = {
         Kind.IMAGE: Workflow(
@@ -137,6 +141,17 @@ def _studio(config: FridayConfig, router: ProviderRouter) -> StudioDelegate | No
         timeout_s=st.job_timeout_s,
         open_results=st.open_results,
         music_dir=music,
+        edit_workflow=Workflow(
+            qwen_image_edit(),
+            {
+                "unet": st.edit_unet,
+                "text_encoder": st.edit_text_encoder,
+                "vae": st.edit_vae,
+                "steps": st.edit_steps,
+            },
+        )
+        if st.edit_unet and st.edit_text_encoder
+        else None,
     )
 
 
@@ -657,6 +672,9 @@ def _model_list(
     if studio is not None and Kind.IMAGE in studio.workflows:
         label = Path(s.image_checkpoint).stem if not s.image_workflow else "your workflow"
         out.append({"role": "Makes pictures", "label": label, "where": "graphics card, ComfyUI"})
+    if studio is not None and studio.edit_workflow is not None:
+        label = Path(s.edit_unet).stem
+        out.append({"role": "Changes pictures", "label": label, "where": "graphics card, ComfyUI"})
     if studio is not None and Kind.MUSIC in studio.workflows:
         label = Path(s.music_checkpoint).stem if s.music_checkpoint else "your workflow"
         out.append({"role": "Makes music", "label": label, "where": "graphics card, ComfyUI"})

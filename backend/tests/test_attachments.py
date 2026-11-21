@@ -27,6 +27,7 @@ from friday.conversation.engine import PICTURES_NOT_SET_UP, ConversationEngine
 from friday.conversation.studio import Kind, Request, StudioDelegate, Workflow
 from friday.core.messages import ChatRequest, Message, Role
 from friday.documents import DocumentError, category, extract_text, for_model
+from friday.integrations import image_edit
 from friday.integrations.audio_tools import (
     AudioEdit,
     ffmpeg_args,
@@ -35,7 +36,7 @@ from friday.integrations.audio_tools import (
     parse_audio_edit,
     wants_new_part,
 )
-from friday.integrations.workflows import sdxl_text_to_image
+from friday.integrations.workflows import qwen_image_edit, sdxl_text_to_image
 from friday.llm.providers.fake import FakeProvider
 from friday.llm.providers.ollama import OllamaProvider
 from friday.llm.router import ProviderRouter
@@ -706,3 +707,100 @@ def test_remove_the_vocals_from_the_music_tab_changes_the_song(tmp_path: Path) -
         assert Path(stored.file).name == "Old Song (no vocals 1).mp3"
         assert Path(stored.file).read_text() == "music"
     assert talk.requests == []
+
+
+# Changing an attached picture
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "make the sky red",
+        "Friday, can you remove the man on the left?",
+        "please turn it into a watercolour painting",
+        "change her dress to blue",
+        "I want you to add a hat on the dog",
+        "could you edit this photo so it looks like night",
+    ],
+)
+def test_change_requests(text: str) -> None:
+    assert image_edit.wants_picture_edit(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["what's in this picture?", "who is this?", "describe it", "is this a fox?", "", "nice one"],
+)
+def test_questions_about_a_picture_are_not_changes(text: str) -> None:
+    assert not image_edit.wants_picture_edit(text)
+
+
+def test_the_words_for_the_editor_drop_the_polite_part() -> None:
+    assert image_edit.instruction("Friday, can you please make the sky red?") == "make the sky red"
+
+
+def _editing_app(tmp_path: Path, fake: FakeComfy | None) -> AppServices:
+    services, _, _ = _app(tmp_path)
+    if fake is not None:
+        studio = StudioDelegate(
+            fake.client(),
+            {},
+            tmp_path / "Pictures",
+            open_results=False,
+            edit_workflow=Workflow(
+                qwen_image_edit(),
+                {"unet": "e.gguf", "text_encoder": "t.gguf", "vae": "v.safetensors", "steps": 4},
+            ),
+        )
+        services.studio = studio
+    return services
+
+
+def test_a_picture_is_changed_by_the_editor_not_the_talking_model(tmp_path: Path) -> None:
+    fake = FakeComfy()
+    services = _editing_app(tmp_path, fake)
+    with _client(services) as client, client.websocket_connect("/ws", headers=HOST) as ws:
+        pic = _upload(client, "fox.png", b"\x89PNG fake")
+        ws.send_json({"type": "chat", "text": "make the fox white", "files": [pic["id"]]})
+        done = _until(
+            ws,
+            "message_update",
+            lambda e: e["message"]["meta"].get("status") in {"done", "failed"},
+        )["message"]
+        assert done["meta"]["status"] == "done", done["meta"]
+        assert done["meta"]["edit"] is True and done["meta"]["kind"] == "image"
+        assert done["file_name"] == "fox (edited 1).png"
+        assert fake.uploaded and b"\x89PNG fake" in fake.uploaded[0]
+        sent = fake.queued[0]
+        assert sent["4"]["inputs"]["image"] == "friday-pic.png"
+        assert sent["6"]["inputs"]["prompt"] == "make the fox white"
+        assert sent["1"]["inputs"]["unet_name"] == "e.gguf"
+        # A follow-up without attaching changes the newest version.
+        cid = done["conversation_id"]
+        ws.send_json({"type": "chat", "conversation_id": cid, "text": "now give it a red scarf"})
+        again = _until(
+            ws,
+            "message_update",
+            lambda e: (
+                e["message"]["meta"].get("status") == "done" and e["message"]["id"] != done["id"]
+            ),
+        )["message"]
+        assert again["file_name"] == "fox edited 1 (edited 1).png"
+        assert fake.uploaded[1].count(b"\x89PNG fake FRIDAY") == 1
+
+
+def test_without_the_editor_it_says_so_and_changes_nothing(tmp_path: Path) -> None:
+    services = _editing_app(tmp_path, None)
+    with _client(services) as client, client.websocket_connect("/ws", headers=HOST) as ws:
+        pic = _upload(client, "fox.png", b"\x89PNG fake")
+        ws.send_json({"type": "chat", "text": "remove the fox", "files": [pic["id"]]})
+        said = _until(ws, "message", lambda e: e["message"]["role"] == "assistant")
+        assert said["message"]["content"] == image_edit.NOT_SET_UP_REPLY
+
+
+def test_without_a_picture_it_asks_for_one(tmp_path: Path) -> None:
+    services = _editing_app(tmp_path, FakeComfy())
+    with _client(services) as client, client.websocket_connect("/ws", headers=HOST) as ws:
+        ws.send_json({"type": "chat", "text": "edit this photo so the sky is pink"})
+        said = _until(ws, "message", lambda e: e["message"]["role"] == "assistant")
+        assert said["message"]["content"] == image_edit.ATTACH_REPLY

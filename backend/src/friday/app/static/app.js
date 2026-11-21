@@ -370,14 +370,14 @@ function renderJob(el, m) {
   state.timers.delete(m.id);
   let inner = `<div class="card-head">`;
   if (st === "running" || st === "waiting") {
-    const doing = what === "song" ? "Changing the song" : `Making the ${what}`;
+    const doing = what === "song" ? "Changing the song" : m.meta.edit ? "Changing the picture" : `Making the ${what}`;
     inner += `<span class="spinner"></span><b>${st === "waiting" ? "Waiting for the previous job" : doing}</b><span class="elapsed"></span>`;
   } else if (st === "done") {
-    inner += `<b>${{ picture: "Picture", music: "Music", song: "Changed song" }[what]}</b>`;
+    inner += `<b>${m.meta.edit ? "Changed picture" : { picture: "Picture", music: "Music", song: "Changed song" }[what]}</b>`;
   } else if (st === "cancelled") {
     inner += `<b>Cancelled</b> · ${what}`;
   } else {
-    inner += `<b>${what === "song" ? "Couldn't change the song" : `Couldn't make the ${what}`}</b>`;
+    inner += `<b>${what === "song" ? "Couldn't change the song" : m.meta.edit ? "Couldn't change the picture" : `Couldn't make the ${what}`}</b>`;
   }
   inner += `</div><p class="prompt">${esc(m.content)}</p>`;
   if (st === "running" || st === "waiting") {

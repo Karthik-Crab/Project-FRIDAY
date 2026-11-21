@@ -122,3 +122,60 @@ def ace_step_music() -> dict[str, Any]:
             "inputs": {"audio": ["18", 0], "filename_prefix": "FRIDAY/music", "quality": "V0"},
         },
     }
+
+
+def qwen_image_edit() -> dict[str, Any]:
+    """Change an attached picture by instruction: Qwen-Image-Edit (Rapid AIO).
+
+    The model and its text reader are GGUF files, loaded by city96's
+    ComfyUI-GGUF add-on. The picture is scaled to about one megapixel (what
+    the model was made for) and the result keeps its shape. The Rapid
+    version is tuned for 4 steps at CFG 1.
+    """
+    return {
+        "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": "{{unet}}"}},
+        "2": {
+            "class_type": "CLIPLoaderGGUF",
+            "inputs": {"clip_name": "{{text_encoder}}", "type": "qwen_image"},
+        },
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": "{{vae}}"}},
+        "4": {"class_type": "LoadImage", "inputs": {"image": "{{image}}"}},
+        "5": {
+            "class_type": "ImageScaleToTotalPixels",
+            "inputs": {"image": ["4", 0], "upscale_method": "lanczos", "megapixels": 1.0},
+        },
+        "6": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {
+                "clip": ["2", 0],
+                "prompt": "{{prompt}}",
+                "vae": ["3", 0],
+                "image1": ["5", 0],
+            },
+        },
+        "7": {
+            "class_type": "TextEncodeQwenImageEditPlus",
+            "inputs": {"clip": ["2", 0], "prompt": "", "vae": ["3", 0], "image1": ["5", 0]},
+        },
+        "8": {"class_type": "VAEEncode", "inputs": {"pixels": ["5", 0], "vae": ["3", 0]}},
+        "9": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": "{{seed}}",
+                "steps": "{{steps}}",
+                "cfg": 1.0,
+                "sampler_name": "euler_ancestral",
+                "scheduler": "beta",
+                "denoise": 1.0,
+                "model": ["1", 0],
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "latent_image": ["8", 0],
+            },
+        },
+        "10": {"class_type": "VAEDecode", "inputs": {"samples": ["9", 0], "vae": ["3", 0]}},
+        "11": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": "FRIDAY-edit", "images": ["10", 0]},
+        },
+    }

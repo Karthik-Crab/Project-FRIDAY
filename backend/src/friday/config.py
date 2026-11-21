@@ -195,6 +195,13 @@ class StudioSettings(_Strict):
     music_lyrics: str = "[instrumental]"
     music_bpm: int = Field(default=110, ge=40, le=240)
     music_key: str = "C major"
+    # Changing an attached picture ("make the sky red"): Qwen-Image-Edit GGUF
+    # files in ComfyUI's models folders (needs the ComfyUI-GGUF add-on).
+    # "" = off.
+    edit_unet: str = ""
+    edit_text_encoder: str = ""
+    edit_vae: str = "qwen_image_vae.safetensors"
+    edit_steps: int = Field(default=4, ge=1, le=50)
 
     @field_validator("comfyui_url")
     @classmethod

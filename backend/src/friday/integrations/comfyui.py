@@ -283,6 +283,24 @@ class ComfyClient:
             raise ComfyError(f"could not fetch {item.filename} (HTTP {response.status_code})")
         return await asyncio.to_thread(_save, folder, item.filename, response.content)
 
+    async def upload_image(self, path: Path) -> str:
+        """Give ComfyUI a picture to work on; returns the name to use in a workflow."""
+        data = await asyncio.to_thread(path.read_bytes)
+        name = f"friday-{uuid.uuid4().hex[:12]}{path.suffix.lower() or '.png'}"
+        try:
+            response = await self._client.post(
+                "/upload/image",
+                files={"image": (name, data, "application/octet-stream")},
+                data={"overwrite": "true"},
+            )
+        except httpx.HTTPError as exc:
+            raise ComfyError(f"could not give ComfyUI the picture ({type(exc).__name__})") from exc
+        if response.status_code != 200:
+            raise ComfyError(f"ComfyUI did not take the picture (HTTP {response.status_code})")
+        uploaded = response.json()
+        sub = uploaded.get("subfolder") or ""
+        return f"{sub}/{uploaded['name']}" if sub else str(uploaded["name"])
+
     async def free(self) -> None:
         """Ask ComfyUI to give the graphics card back. Best effort."""
         try:
