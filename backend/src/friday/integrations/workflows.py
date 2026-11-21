@@ -142,7 +142,12 @@ def qwen_image_edit() -> dict[str, Any]:
         "4": {"class_type": "LoadImage", "inputs": {"image": "{{image}}"}},
         "5": {
             "class_type": "ImageScaleToTotalPixels",
-            "inputs": {"image": ["4", 0], "upscale_method": "lanczos", "megapixels": 1.0},
+            "inputs": {
+                "image": ["4", 0],
+                "upscale_method": "lanczos",
+                "megapixels": 1.0,
+                "resolution_steps": 16,
+            },
         },
         "6": {
             "class_type": "TextEncodeQwenImageEditPlus",
