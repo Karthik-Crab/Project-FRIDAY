@@ -87,10 +87,40 @@ system snapshot. Found on 2026-11-21:
   the Python development headers are not installed); the job finishes
   normally. `sudo dnf install python3.13-devel` would silence it.
 
+### First voice test with the owner
+
+- `friday voice` stopped at once: `OSError: PortAudio library not found`. The
+  rollback had removed it; the owner ran `sudo dnf install -y portaudio`.
+- "Ah, it's good. Can you generate an image of a cat ..." was **not**
+  recognised: requests were only looked for at the very start of what was
+  said. The talking model then said no picture could be made. Fixed: every
+  sentence is checked, last first, and "so", "now", "alright", "well" ...
+  before the request are skipped. The persona text now tells the model never
+  to say it cannot be done, but to tell the owner to say "make a picture of".
+- No expressive voice: the Chatterbox service was not running (it is started
+  by hand, it is not started by FRIDAY).
+
+### Chatterbox, talking model and ComfyUI on one 8 GB card (run on the PC)
+
+- Chatterbox Turbo started with `llama3.1:8b` already loaded: **out of
+  memory** (llama 5.1 GB, only 1.5 GB left).
+- Chatterbox alone: **about 3.2 GB**, 0.6 s for 2.5 s of speech, 0.9 s for
+  4.6 s.
+- Chatterbox first, then `llama3.1:8b`: Ollama puts 85% on the card, 15% on
+  the processor. 14.5 to 16 tokens/s (96 alone), prompt read fast. Still
+  several times faster than speech. `gemma3:4b` beside it: 33.6 tokens/s but
+  4 s to read a long prompt, so llama stays.
+- So **the voice service must be started before FRIDAY** (before the talking
+  model loads), otherwise it does not fit.
+- With Chatterbox running: picture 34 s (26 s without), music **92 s**
+  (20 s without, 30 s of music). ComfyUI fits by keeping part of the model off
+  the card; the voice still answered afterwards.
+- Possible later improvement: stop or move Chatterbox off the card during a
+  music job.
+
 ### Not yet done
 
-- Voice test with the owner ("make a picture of ...", "yes").
-- Chatterbox and ComfyUI together on the card (memory not measured).
+- Voice test with the owner after the fix ("make a picture of ...", "yes").
 - Windows Fast Startup off (`powercfg /h off`) the next time in Windows, so
   the Windows partition holding the studio file is always cleanly closed.
 

@@ -48,7 +48,8 @@ _LABEL = {Kind.IMAGE: "Picture", Kind.MUSIC: "Music"}
 
 _SEP = r"[\s,.:;!?-]+"
 _LEAD = (
-    rf"^\W*(?:(?:hey|ok|okay){_SEP})?(?:friday{_SEP})?(?:please{_SEP})?"
+    rf"^\W*(?:(?:hey|ok|okay|so|now|and|also|alright|right|well|then){_SEP}){{0,3}}"
+    rf"(?:friday{_SEP})?(?:(?:now|then){_SEP})?(?:please{_SEP})?"
     rf"(?:(?:can|could|would|will){_SEP}you{_SEP})?(?:please{_SEP})?"
     rf"(?:(?:i{_SEP}(?:want|d{_SEP}like|would{_SEP}like){_SEP}you{_SEP}to){_SEP})?"
     rf"(?:(?:go{_SEP}ahead{_SEP}and|quickly|just){_SEP})?"
@@ -109,9 +110,28 @@ class Request:
     prompt: str  # "" = the user did not say what it should be yet
 
 
+# Where a new sentence starts: after . ! or ? and a space.
+_SENTENCE = re.compile(r"(?<=[.!?])\s+")
+
+
 def parse_request(text: str) -> Request | None:
-    """Is this a request for a picture or music? Returns what to make."""
+    """Is this a request for a picture or music? Returns what to make.
+
+    The request may come after something else ("Ah, it's good. Can you make a
+    picture of ..."), so each sentence is tried, the last one first.
+    """
     text = text.strip()
+    sentences = _SENTENCE.split(text)
+    if len(sentences) > 1:
+        for sentence in reversed(sentences):
+            found = _parse_sentence(sentence.strip())
+            if found:
+                return found
+        return None
+    return _parse_sentence(text)
+
+
+def _parse_sentence(text: str) -> Request | None:
     for kind, pattern in ((Kind.IMAGE, _IMAGE), (Kind.MUSIC, _MUSIC)):
         match = pattern.match(text)
         if not match:
@@ -136,7 +156,7 @@ def parse_request(text: str) -> Request | None:
 
 
 def is_studio_command(text: str) -> bool:
-    return parse_request(text) is not None or bool(_CANCEL.match(text))
+    return parse_request(text) is not None or bool(_CANCEL.match(text.strip()))
 
 
 def not_set_up_reply(kind: Kind) -> str:

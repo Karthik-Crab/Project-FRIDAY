@@ -567,3 +567,24 @@ def test_built_in_music_workflow_needs_only_known_values() -> None:
     )
     assert filled["94"]["inputs"]["seed"] == filled["3"]["inputs"]["seed"]
     assert filled["98"]["inputs"]["seconds"] == 30
+
+
+@pytest.mark.parametrize(
+    ("text", "kind", "prompt"),
+    [
+        (
+            "Ah, it's good. Can you generate an image of a cat on a rainy day sitting on a wall?",
+            Kind.IMAGE,
+            "a cat on a rainy day sitting on a wall",
+        ),
+        ("Thanks! Now make some music about the sea.", Kind.MUSIC, "music about the sea"),
+        ("I like cats. They are nice.", None, None),
+        ("Make a picture of a fox. Thanks.", Kind.IMAGE, "a fox"),
+    ],
+)
+def test_request_after_other_sentences(text: str, kind: Kind | None, prompt: str | None) -> None:
+    found = parse_request(text)
+    if kind is None:
+        assert found is None
+    else:
+        assert found == Request(kind, prompt or "")

@@ -162,9 +162,10 @@ class ConversationEngine:
         return (
             "Pictures and music can be made on this computer, but only when "
             f'{user} says "make a picture of ..." or "make a song about ..." and then '
-            "confirms; it is handled for you. If they seem to want one, tell them to say "
-            "that. Never say a picture or song is made, or describe it, unless that "
-            "appears in this conversation."
+            "confirms; it is handled for you. If they seem to want one and it was not "
+            f'picked up, never say it cannot be done: tell {user} to say "make a picture '
+            'of" followed by what it should show. Never say a picture or song is made, '
+            "or describe it, unless that appears in this conversation."
         )
 
     async def respond(self, user_text: str) -> AsyncGenerator[str, None]:
