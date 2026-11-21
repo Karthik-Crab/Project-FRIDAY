@@ -25,6 +25,7 @@ const state = {
   timers: new Map(),
   attachments: [],        // files picked for the next message: {key, id, name, category, uploading, preview}
   think: loadThink(),     // let the talking model think before answering
+  answering: null,         // conversation whose answer is being written ("new" before it has an id)
   waiting: null,          // "FRIDAY is working" bubble shown until the reply starts: {el, label, start, timer}
 };
 
@@ -172,7 +173,10 @@ function onEvent(ev) {
       break;
     case "message":
     case "message_update":
-      if (ev.type === "message" && ev.message.role === "assistant") clearWaiting();
+      if (ev.type === "message" && ev.message.role === "assistant") {
+        clearWaiting();
+        if (state.answering === ev.message.conversation_id || state.answering === "new") setAnswering(null);
+      }
       touch(ev.message.conversation_id);
       if (ev.message.conversation_id === state.current) putMessage(ev.message);
       break;
@@ -182,6 +186,7 @@ function onEvent(ev) {
       break;
     }
     case "stream_start":
+      if (state.answering) setAnswering(ev.conversation_id);
       if (ev.conversation_id === state.current) startDraft(ev.draft);
       break;
     case "delta": {
@@ -195,6 +200,7 @@ function onEvent(ev) {
       break;
     }
     case "stream_end": {
+      if (state.answering === ev.message.conversation_id) setAnswering(null);
       stopWaitingTimer(state.drafts.get(ev.draft));
       const d = state.drafts.get(ev.draft);
       state.drafts.delete(ev.draft);
@@ -325,7 +331,7 @@ function renderMessage(m) {
   if (m.kind === "proposal") return renderProposal(el, m);
   if (m.kind === "job") return renderJob(el, m);
   if (m.meta.failed) el.classList.add("failed");
-  const who = [m.meta.voice ? "🎙 spoken" : "", m.meta.model || m.meta.provider || ""].filter(Boolean);
+  const who = [m.meta.stopped ? "⏹ stopped" : "", m.meta.voice ? "🎙 spoken" : "", m.meta.model || m.meta.provider || ""].filter(Boolean);
   el.innerHTML = `<div class="body">${markdown(m.content)}</div>${who.length ? `<div class="tag">${who.map(esc).map((w) => `<span>${w}</span>`).join("")}</div>` : ""}`;
   return el;
 }
@@ -399,8 +405,26 @@ function renderJob(el, m) {
 }
 
 function waitingHtml(label) {
-  return `<span class="typing" aria-label="FRIDAY is working"><i></i><i></i><i></i></span>`
-    + `<span class="wait-label">${esc(label)}</span><span class="wait-time"></span>`;
+  return `<span class="working" aria-live="polite"><span class="orb" aria-hidden="true"></span>`
+    + `<span class="typing" aria-hidden="true"><i></i><i></i><i></i></span>`
+    + `<span class="wait-label">${esc(label || "Writing…")}</span><span class="wait-time"></span></span>`;
+}
+
+// While an answer is being written, the send button becomes Stop.
+function setAnswering(cid) {
+  state.answering = cid;
+  const on = Boolean(cid);
+  els.send.classList.toggle("stop", on);
+  els.send.textContent = on ? "■" : "↑";
+  els.send.setAttribute("aria-label", on ? "Stop the answer" : "Send");
+  els.send.title = on ? "Stop the answer (Esc)" : "";
+  autosize();
+}
+
+async function stopAnswer() {
+  const cid = state.answering;
+  if (!cid || cid === "new") return;
+  try { await send({ type: "stop", conversation_id: cid }); } catch (e) { toast(e.message); }
 }
 
 // A bubble with moving dots, shown from sending until the first words arrive.
@@ -478,6 +502,7 @@ async function submit(text) {
       const kinds = files.map((a) => a.category);
       const think = state.think && state.status.can_think;
       if (!kinds.includes("audio")) {
+        setAnswering(state.current || "new");
         showWaiting(
           kinds.includes("image") ? "Looking at the picture…"
             : kinds.includes("document") ? "Reading the document…"
@@ -491,6 +516,7 @@ async function submit(text) {
     return reply;
   } catch (e) {
     clearWaiting();
+    setAnswering(null);
     toast(e.message);
     if (!els.input.value) { els.input.value = text; autosize(); }
     if (!state.attachments.length && files.length) { state.attachments = files; renderTray(); }
@@ -587,7 +613,7 @@ function setMode(mode) {
 function autosize() {
   els.input.style.height = "auto";
   els.input.style.height = Math.min(els.input.scrollHeight, 220) + "px";
-  els.send.disabled = !els.input.value.trim() && !state.attachments.length;
+  els.send.disabled = !state.answering && !els.input.value.trim() && !state.attachments.length;
 }
 
 // ---- voice ---------------------------------------------------------------
@@ -638,7 +664,11 @@ async function toggleVoice() {
 
 // ---- wiring --------------------------------------------------------------
 
-els.composer.addEventListener("submit", (e) => { e.preventDefault(); submit(els.input.value); });
+els.composer.addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (state.answering) stopAnswer(); else submit(els.input.value);
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.answering) stopAnswer(); });
 els.input.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(els.input.value); }
 });

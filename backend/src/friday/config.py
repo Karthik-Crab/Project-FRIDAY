@@ -222,6 +222,28 @@ class AppSettings(_Strict):
     document_chars: int = Field(default=14_000, ge=1_000, le=400_000)
 
 
+class SongAISettings(_Strict):
+    """AI changes to attached songs: add an instrument, pull one out, restyle,
+    redo a stretch. Runs ACE-Step 1.5's own server (its base model)."""
+
+    enabled: bool = False
+    url: str = "http://127.0.0.1:8001"
+    # How to start the server when it isn't running; [] = start it yourself.
+    command: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    model: str = "acestep-v15-base"
+    steps: int = Field(default=50, ge=4, le=200)  # more: better and slower
+    start_timeout_s: float = Field(default=600.0, ge=10, le=3600)
+    timeout_s: float = Field(default=1800.0, ge=60, le=7200)
+    # Stop the server after each change, which gives its memory back.
+    stop_after: bool = True
+
+    @field_validator("url")
+    @classmethod
+    def _song_ai_is_on_this_machine(cls, value: str) -> str:
+        return _this_machine_only("song_ai.url", value)
+
+
 class FridayConfig(_Strict):
     user_name: str = "Karthik"
     default_mode: Mode = Mode.COMPANION
@@ -235,6 +257,7 @@ class FridayConfig(_Strict):
     memory: MemorySettings = Field(default_factory=MemorySettings)
     studio: StudioSettings = Field(default_factory=StudioSettings)
     app: AppSettings = Field(default_factory=AppSettings)
+    song_ai: SongAISettings = Field(default_factory=SongAISettings)
 
     @model_validator(mode="after")
     def _check_routes(self) -> FridayConfig:

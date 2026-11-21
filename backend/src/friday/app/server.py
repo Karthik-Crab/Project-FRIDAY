@@ -209,6 +209,10 @@ async def _handle(services: AppServices, ws: WebSocket, data: Any) -> None:
             result["job_id"] = job
         elif kind == "dismiss":
             services.dismiss(int(data["message_id"]))
+        elif kind == "stop":
+            if cid is None:
+                raise FridayError("which conversation?")
+            result["stopped"] = services.stop_reply(cid)
         elif kind == "cancel_job":
             services.cancel_job(int(data["message_id"]))
         elif kind == "voice":

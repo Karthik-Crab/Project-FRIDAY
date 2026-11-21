@@ -31,6 +31,8 @@ from friday.integrations.audio_tools import (
     parse_audio_edit,
     wants_new_part,
 )
+from friday.integrations.song_ai import SongEditor, SongTask, parse_song_task
+from friday.integrations.song_ai import output_path as song_output_path
 
 log = logging.getLogger(__name__)
 
@@ -40,12 +42,21 @@ _MAX_ENGINES = 20  # conversations kept in memory; older ones are rebuilt from t
 _UPLOAD_ID = re.compile(r"^[0-9a-f]{32}$")
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
 _NEW_PART_REPLY = (
-    "Playing a new instrument part on top of a song isn't ready yet; it's being worked on. "
-    'For now I can make the bass stronger or softer: say "add some bass" or "less bass".'
+    "Playing a new instrument part on top of a song isn't set up on this computer. "
+    'I can make the bass stronger or softer: say "add some bass" or "less bass".'
 )
 _SONG_REPLY = (
-    "I've got the song. For now I can make its bass stronger or softer: "
+    "I've got the song. I can make its bass stronger or softer: "
     'say "add some bass", "a lot more bass" or "less bass".'
+)
+_SONG_AI_REPLY = (
+    "I've got the song. What should I do with it? For example:\n"
+    '- "add some bass" or "less bass" (quick, a few seconds)\n'
+    '- "add a funky bass line", "add drums", "add a piano part" (a new part played by AI)\n'
+    '- "give me just the vocals" (pull one instrument out)\n'
+    '- "make it a jazz version" (a new style)\n'
+    '- "redo 0:30 to 0:45 with a guitar solo" (remake one stretch)\n'
+    "The AI ones take a few minutes."
 )
 
 
@@ -96,6 +107,7 @@ class AppServices:
         can_see: bool = False,
         document_chars: int = 14_000,
         can_think: bool = False,
+        song_ai: SongEditor | None = None,
     ) -> None:
         self.store = store
         self.uploads_dir = uploads_dir
@@ -103,6 +115,7 @@ class AppServices:
         self.ffmpeg = ffmpeg
         self.can_see = can_see
         self.can_think = can_think
+        self.song_ai = song_ai
         self.document_chars = document_chars
         self._make_engine = make_engine
         self.studio = studio
@@ -111,6 +124,7 @@ class AppServices:
         self._engines: dict[str, ConversationEngine] = {}
         self._turn_locks: dict[str, asyncio.Lock] = {}
         self._jobs: dict[int, asyncio.Task[None]] = {}
+        self._replies: dict[str, asyncio.Task[None]] = {}  # answers being written
         self._subscribers: set[asyncio.Queue[Event]] = set()
         self._voice_reply: list[str] = []
         self._voice_user_id: int | None = None
@@ -154,7 +168,7 @@ class AppServices:
             "can_read": {
                 "image": self.can_see,
                 "document": True,
-                "audio": bool(self.ffmpeg and self.audio_dir),
+                "audio": bool(self.audio_dir and (self.ffmpeg or self.song_ai)),
             },
         }
 
@@ -245,10 +259,30 @@ class AppServices:
             engine.think = think if self.can_think else None
             draft = f"d{uuid.uuid4().hex[:12]}"
             self.emit({"type": "stream_start", "conversation_id": cid, "draft": draft})
-            async for delta in engine.respond(text, images):
-                self.emit({"type": "delta", "draft": draft, "text": delta})
+
+            async def write() -> None:
+                async with contextlib.aclosing(engine.respond(text, images)) as deltas:
+                    async for delta in deltas:
+                        self.emit({"type": "delta", "draft": draft, "text": delta})
+
+            writing = asyncio.get_running_loop().create_task(write())
+            self._replies[cid] = writing
+            stopped = False
+            try:
+                await writing
+            except asyncio.CancelledError:
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    raise  # the app itself is stopping, not the Stop button
+                stopped = True
+            finally:
+                self._replies.pop(cid, None)
             turn = engine.last_turn
+            if stopped and not turn.full_text:
+                turn.full_text = "(stopped)"
             meta: dict[str, Any] = {"mode": turn.mode.value}
+            if stopped:
+                meta["stopped"] = True
             if turn.provider is not None:
                 meta["provider"] = turn.provider.name
                 meta["model"] = turn.provider.model
@@ -284,8 +318,19 @@ class AppServices:
         songs = [u for u in uploads if u.category == "audio"]
         if songs:
             edit = parse_audio_edit(text)
-            if edit is None:
-                self._say(cid, said, _NEW_PART_REPLY if wants_new_part(text) else _SONG_REPLY)
+            task = None if edit else parse_song_task(text)
+            if task is not None and self.song_ai is not None and self.audio_dir:
+                for song in songs:
+                    self._start_song_job(cid, song, task)
+                self._remember(cid, said, f"(changing the song with AI: {task.describe})")
+            elif edit is None:
+                if self.song_ai is not None:
+                    reply = _SONG_AI_REPLY
+                elif task is not None or wants_new_part(text):
+                    reply = _NEW_PART_REPLY
+                else:
+                    reply = _SONG_REPLY
+                self._say(cid, said, reply)
             elif not (self.ffmpeg and self.audio_dir):
                 self._say(cid, said, "Changing songs needs ffmpeg, and it isn't installed.")
             else:
@@ -413,6 +458,14 @@ class AppServices:
         self._remember(done.conversation_id, f"(asked for {spoken}: {prompt})", said)
         return done
 
+    def stop_reply(self, cid: str) -> bool:
+        """The Stop button: end the answer being written now, keeping what's there."""
+        writing = self._replies.get(cid)
+        if writing is None or writing.done():
+            return False
+        writing.cancel()
+        return True
+
     def cancel_job(self, job_id: int) -> bool:
         task = self._jobs.get(job_id)
         if task is None:
@@ -504,6 +557,65 @@ class AppServices:
             raise
         except Exception as exc:  # never leave a job spinning
             log.exception("song change failed")
+            done = self.store.update(job_id, meta={"status": "failed", "error": str(exc)})
+        else:
+            done = self.store.update(
+                job_id,
+                file=str(target),
+                meta={"status": "done", "seconds": round(loop.time() - begun)},
+            )
+        self._emit_message(done, "message_update")
+        self._remember(done.conversation_id, "(changing the song)", self._history_text(done))
+
+    def _start_song_job(self, cid: str, song: Upload, task: SongTask) -> int:
+        busy = self.studio is not None and self.studio.queued_or_running
+        job = self.store.add(
+            cid,
+            "assistant",
+            "job",
+            f"{song.name}: {task.describe}",
+            meta={
+                "kind": "audio_edit",
+                "ai": task.task,
+                "status": "waiting" if busy else "running",
+                "source": song.id,
+            },
+        )
+        self._emit_message(job)
+        run = self._run_song_job(job.id, song, task)
+        handle = asyncio.get_running_loop().create_task(run)
+        self._jobs[job.id] = handle
+        handle.add_done_callback(lambda _: self._jobs.pop(job.id, None))
+        return job.id
+
+    async def _run_song_job(self, job_id: int, song: Upload, task: SongTask) -> None:
+        assert self.song_ai is not None and self.audio_dir is not None
+        editor, folder = self.song_ai, self.audio_dir
+        loop = asyncio.get_running_loop()
+        begun = loop.time()
+
+        def started() -> None:
+            nonlocal begun
+            begun = loop.time()
+            self._emit_message(
+                self.store.update(job_id, meta={"status": "running"}), "message_update"
+            )
+
+        async def work() -> Path:
+            return await editor.run(song.path, task, song_output_path(song.path, task, folder))
+
+        try:
+            if self.studio is not None:
+                target = await self.studio.exclusive(work, on_start=started)
+            else:
+                target = await work()
+        except asyncio.CancelledError:
+            self._emit_message(
+                self.store.update(job_id, meta={"status": "cancelled"}), "message_update"
+            )
+            raise
+        except Exception as exc:  # never leave a job spinning
+            log.exception("AI song change failed")
             done = self.store.update(job_id, meta={"status": "failed", "error": str(exc)})
         else:
             done = self.store.update(

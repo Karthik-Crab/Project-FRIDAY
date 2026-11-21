@@ -165,3 +165,20 @@ document_chars = 14000           # how much of an attached document goes to the 
 # under [voice] (adjust the paths):
 # tts_server_command = ["~/local-ai/chatterbox-venv/bin/python", "~/local-ai/Project-FRIDAY/backend/servers/chatterbox_server.py", "--device", "cuda", "--port", "5005"]
 # tts_server_env = { HF_HOME = "/mnt/studio/huggingface", HF_HUB_OFFLINE = "1" }
+
+# ---------------------------------------------------------------------------
+# AI changes to songs attached in the chat app: add an instrument part
+# ("add a funky bass line"), pull one out ("just the vocals"), a new style
+# ("make it a jazz version"), or redo a stretch ("redo 0:30 to 0:45 with a
+# guitar solo"). Needs ACE-Step 1.5 (github.com/ace-step/ACE-Step-1.5)
+# installed separately, with its base model (acestep-v15-base). FRIDAY starts
+# its server when needed and stops it afterwards. 127.0.0.1 only.
+# ---------------------------------------------------------------------------
+[song_ai]
+enabled = false
+url = "http://127.0.0.1:8001"
+# command = ["/path/to/ACE-Step-1.5/.venv/bin/acestep-api"]
+# env = { ACESTEP_CONFIG_PATH = "acestep-v15-base", ACESTEP_INIT_LLM = "false", ACESTEP_OFFLOAD_TO_CPU = "true" }
+model = "acestep-v15-base"
+steps = 50                       # more: better and slower
+stop_after = true                # stop the server after each change (gives its memory back)

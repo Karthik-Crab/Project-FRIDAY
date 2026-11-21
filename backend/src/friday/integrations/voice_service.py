@@ -41,7 +41,9 @@ class VoiceServiceLauncher:
         start_timeout_s: float = 120.0,
         poll_s: float = 1.0,
         client: httpx.AsyncClient | None = None,
+        label: str = "the voice service",
     ) -> None:
+        self.label = label
         self.command = [str(Path(part).expanduser()) if "~" in part else part for part in command]
         self.health_url = health_url.rstrip("/") + "/health"
         self.env = {k: str(Path(v).expanduser()) if "~" in v else v for k, v in (env or {}).items()}
@@ -83,7 +85,7 @@ class VoiceServiceLauncher:
             )
         except OSError as exc:
             raise VoiceServiceError(
-                f"could not start the voice service ({self.command[0]}): {exc}"
+                f"could not start {self.label} ({self.command[0]}): {exc}"
             ) from exc
         finally:
             if output is not subprocess.DEVNULL:
@@ -94,9 +96,9 @@ class VoiceServiceLauncher:
         if await self.is_up():
             return False
         if not self.command:
-            raise VoiceServiceError("no command to start the voice service is set")
+            raise VoiceServiceError(f"no command to start {self.label} is set")
         if self._process is None or self._process.poll() is not None:
-            log.info("starting the voice service: %s", " ".join(self.command))
+            log.info("starting %s: %s", self.label, " ".join(self.command))
             self._process = self._spawn()
         deadline = time.monotonic() + self.start_timeout_s
         while time.monotonic() < deadline:
@@ -105,10 +107,10 @@ class VoiceServiceLauncher:
                 return True
             if self._process.poll() is not None:
                 where = f" See {self.log_path}." if self.log_path else ""
-                raise VoiceServiceError(f"the voice service stopped while starting.{where}")
+                raise VoiceServiceError(f"{self.label} stopped while starting.{where}")
         self.stop()
         raise VoiceServiceError(
-            f"the voice service did not start within {self.start_timeout_s:.0f} seconds"
+            f"{self.label} did not start within {self.start_timeout_s:.0f} seconds"
         )
 
     def stop(self) -> None:
@@ -116,7 +118,7 @@ class VoiceServiceLauncher:
         process, self._process = self._process, None
         if process is None or process.poll() is not None:
             return
-        log.info("stopping the voice service")
+        log.info("stopping %s", self.label)
         process.terminate()
         try:
             process.wait(timeout=10)

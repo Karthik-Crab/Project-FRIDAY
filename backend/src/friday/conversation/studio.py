@@ -23,16 +23,18 @@ import asyncio
 import contextlib
 import logging
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from friday.conversation.delegation import Notice, is_no, is_yes
 from friday.core.errors import FridayError
 from friday.integrations.comfyui import ComfyClient, ComfyLauncher, fill_workflow, open_file
 from friday.llm.router import ProviderRouter
+
+T = TypeVar("T")
 
 log = logging.getLogger(__name__)
 
@@ -316,6 +318,26 @@ class StudioDelegate:
             if on_start is not None:
                 on_start()
             return await self._make(request)
+
+    async def exclusive(
+        self, work: Callable[[], Awaitable[T]], on_start: Callable[[], None] | None = None
+    ) -> T:
+        """Run ``work`` with the graphics card to itself (after any job in front).
+
+        For other programs that need the card, such as ACE-Step changing a song:
+        ComfyUI lets go of its models and the talking models step aside.
+        """
+        async with self._card:
+            if on_start is not None:
+                on_start()
+            with contextlib.suppress(Exception):
+                if await self.comfy.is_up():
+                    await self.comfy.free()
+            held = await self._take_card()
+            try:
+                return await work()
+            finally:
+                await self._give_back(held)
 
     async def _make(self, request: Request) -> Notice:
         held: list[str] = []

@@ -410,7 +410,7 @@ def test_a_song_without_a_change_asked_for(tmp_path: Path) -> None:
         assert "add some bass" in said["message"]["content"]
         ws.send_json({"type": "chat", "text": "add a bass line", "files": [song["id"]]})
         said = _until(ws, "message", lambda e: e["message"]["role"] == "assistant")
-        assert "isn't ready yet" in said["message"]["content"]
+        assert "isn't set up" in said["message"]["content"]
         assert talk.requests == []
 
 
@@ -522,3 +522,27 @@ def test_the_model_list_says_what_each_is_for(tmp_path: Path) -> None:
         ("Voice", "Chatterbox", "graphics card, only while on"),
         ("Hearing", "Whisper base.en", "processor"),
     ]
+
+
+def test_the_stop_button_ends_the_answer_and_keeps_what_was_written(tmp_path: Path) -> None:
+    services, talk, _ = _app(tmp_path, reply=" ".join(f"word{i}" for i in range(400)))
+    talk._delay = 0.02  # slow enough to stop halfway
+    with _client(services) as http, http.websocket_connect("/ws", headers=HOST) as ws:
+        ws.send_json({"type": "chat", "text": "tell me a long story"})
+        start = _until(ws, "stream_start", lambda e: True)
+        _until(ws, "delta", lambda e: e["draft"] == start["draft"])
+        cid = start["conversation_id"]
+        ws.send_json({"type": "stop", "conversation_id": cid, "request_id": "s"})
+        end = _until(ws, "stream_end", lambda e: e["draft"] == start["draft"])["message"]
+        assert end["meta"]["stopped"] is True
+        assert end["content"].startswith("word0") and "word399" not in end["content"]
+        assert talk.cancelled
+        # Nothing left to stop; the next question is answered normally.
+        ws.send_json({"type": "stop", "conversation_id": cid, "request_id": "t"})
+        assert _until(ws, "reply", lambda e: e["request_id"] == "t")["stopped"] is False
+        talk._delay = 0
+        ws.send_json({"type": "chat", "conversation_id": cid, "text": "and then?"})
+        again = _until(ws, "stream_end", lambda e: True)["message"]
+        assert "stopped" not in again["meta"]
+    history = services.engine(cid).window
+    assert "word0" in str(history.messages)

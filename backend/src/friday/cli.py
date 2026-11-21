@@ -23,7 +23,7 @@ import threading
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from friday.config import FridayConfig, default_config_path, load_config
 from friday.conversation.delegation import CodeDelegate
@@ -36,6 +36,9 @@ from friday.core.messages import ChatRequest
 from friday.core.secrets import KeyringEnvSecretStore
 from friday.llm.factory import build_router
 from friday.llm.router import ProviderRouter
+
+if TYPE_CHECKING:
+    from friday.integrations.song_ai import SongEditor
 from friday.persona.persona import Channel, Mode, Persona
 
 log = logging.getLogger("friday")
@@ -591,6 +594,30 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
     await session.run()
 
 
+def _song_ai(config: FridayConfig, here: Path) -> SongEditor | None:
+    """ACE-Step for AI changes to attached songs, if it is set up."""
+    from friday.integrations.song_ai import AceStepClient, SongEditor
+    from friday.integrations.voice_service import VoiceServiceLauncher
+
+    c = config.song_ai
+    if not c.enabled:
+        return None
+    launcher = (
+        VoiceServiceLauncher(
+            c.command,
+            c.url,
+            env=c.env,
+            log_path=here / "song-ai.log",
+            start_timeout_s=c.start_timeout_s,
+            label="ACE-Step",
+        )
+        if c.command
+        else None
+    )
+    client = AceStepClient(c.url, model=c.model, steps=c.steps, timeout_s=c.timeout_s)
+    return SongEditor(client, launcher, stop_after=c.stop_after)
+
+
 def _model_list(
     config: FridayConfig, router: ProviderRouter, studio: StudioDelegate | None
 ) -> list[dict[str, str]]:
@@ -698,6 +725,16 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
         gpu_providers=config.studio.gpu_providers,
     )
     models = _model_list(config, router, studio)
+    if config.song_ai.enabled:
+        models.insert(
+            len(models) - (2 if config.voice.tts_server_url else 1),
+            {
+                "role": "Changes songs (AI)",
+                "label": config.song_ai.model,
+                "model": config.song_ai.model,
+                "where": "graphics card, ACE-Step, only while working",
+            },
+        )
     ffmpeg = find_ffmpeg(config.app.ffmpeg)
     if ffmpeg is None:
         log.warning("ffmpeg not found: changing attached songs is off")
@@ -713,6 +750,7 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
         can_see=router.has_route("vision"),
         document_chars=config.app.document_chars,
         can_think=any(p.think is not None for p in config.providers.values()),
+        song_ai=_song_ai(config, here),
     )
     port = config.app.port
     server = uvicorn.Server(
