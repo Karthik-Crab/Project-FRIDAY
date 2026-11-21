@@ -41,6 +41,18 @@ docs/                         architecture, risks, roadmap, testing, ADRs
 apps/desktop/                 (Phase 5) Tauri + React shell
 ```
 
+## Open the chat app
+
+Once FRIDAY is installed (below), open it with a double-click:
+
+- **Windows:** `Start FRIDAY.bat` in this folder.
+- **Linux:** run `./start-friday.sh --make-shortcut` once. A FRIDAY icon appears on
+  the desktop and in the app menu. You can also run `./start-friday.sh` directly.
+
+A window opens and the browser shows FRIDAY at `http://127.0.0.1:8765`. Keep that
+window open while you use FRIDAY; closing it stops FRIDAY. If FRIDAY is already
+running, the launcher only opens the page.
+
 ## Quick start (Windows, PowerShell)
 
 ```bash
