@@ -70,6 +70,21 @@ _STYLE = re.compile(
     re.I,
 )
 _STYLE_VERSION = re.compile(r"\b([\w\s-]{2,40}?)\s+(?:version|cover|remix|style)\b", re.I)
+_SOLO = (
+    r"(flute|bansuri|violin|piano|keyboard|guitar|saxophone|sax|veena|sitar|nadaswaram|"
+    r"shehnai|harmonium|mandolin|trumpet|cello|santoor|clarinet|harmonica|accordion)"
+)
+_ON = r"(?:on|with|using|in|by)\s+(?:a\s+|an\s+|the\s+)?"
+# The whole song played by one instrument: "a flute instrumental of this song",
+# "play this song on flute", "the tune on violin". Not "add a flute" (a new part).
+_INSTRUMENT_VERSION = re.compile(
+    rf"\b{_SOLO}\s+(?:instrumental|only|version|cover)\b"
+    rf"|\binstrumental\b.*?\b{_ON}{_SOLO}\b"
+    rf"|\bplay(?:ed)?\s+(?:this|the|my|it|that)(?:\s+(?:song|track|tune|melody|music))?\s+{_ON}{_SOLO}\b"
+    rf"|\b(?:tune|melody)\s+{_ON}{_SOLO}\b"
+    rf"|\bonly\s+(?:a\s+|an\s+|the\s+)?{_SOLO}\b",
+    re.I,
+)
 _FILLER = re.compile(
     r"^(?:please\s+|can\s+you\s+|could\s+you\s+|friday,?\s+)*"
     r"|\s*(?:to|on|over|into)\s+(?:this|the|my)\s+(?:song|track|music|tune)\b.*$"
@@ -137,6 +152,15 @@ def _clean(text: str) -> str:
     return text
 
 
+def instrument_version(text: str) -> str | None:
+    """The instrument, when the whole song should be played on it, else None."""
+    match = _INSTRUMENT_VERSION.search(text)
+    if match is None:
+        return None
+    name = next(g for g in match.groups() if g).lower()
+    return {"sax": "saxophone", "bansuri": "bansuri flute", "keyboard": "piano"}.get(name, name)
+
+
 def parse_song_task(text: str) -> SongTask | None:
     """What the owner wants done to the attached song, or None."""
     text = text.strip()
@@ -148,6 +172,10 @@ def parse_song_task(text: str) -> SongTask | None:
             rest = text[match.end() :].strip(" ,.")
             rest = re.sub(r"^(?:with|as|into|so\s+it\s+has)\s+", "", rest, flags=re.I)
             return SongTask("repaint", rest or "same style", start=start, end=end)
+    if instrument := instrument_version(text):
+        return SongTask(
+            "cover", f"{instrument} instrumental, solo {instrument} playing the melody, no vocals"
+        )
     track = _track(text)
     if track and _EXTRACT.search(text):
         return SongTask("extract", track.replace("_", " "), track=track)

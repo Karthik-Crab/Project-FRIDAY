@@ -283,3 +283,25 @@ async def test_an_added_part_is_mixed_into_the_song(tmp_path: Path) -> None:
     alone = tmp_path / "song (only bass 1).mp3"
     await editor.run(song, SongTask("extract", "bass", "bass"), alone)
     assert not part_path(alone).exists()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "make a flute instrumental of this song",
+        "play this song on flute",
+        "make it a flute version",
+        "the tune on flute please",
+    ],
+)
+def test_the_whole_song_on_one_instrument(text: str) -> None:
+    from friday.integrations.vocals import parse_vocal_task
+
+    task = parse_song_task(text)
+    assert task == SongTask("cover", "flute instrumental, solo flute playing the melody, no vocals")
+    assert parse_vocal_task(text) is None  # not karaoke
+
+
+def test_adding_a_flute_is_still_a_new_part() -> None:
+    task = parse_song_task("add a flute")
+    assert task is not None and task.task == "lego"

@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from friday.core.errors import FridayError
+from friday.integrations.song_ai import instrument_version
 
 REMOVE = "remove"  # the music without the singing (karaoke)
 KEEP = "keep"  # the singing without the music
@@ -44,6 +45,8 @@ def parse_vocal_task(text: str) -> str | None:
     "remove the vocals only" means take the vocals out, so removing is
     checked first; "keep the vocals", "only the voice" mean keep them.
     """
+    if instrument_version(text):
+        return None  # "a flute instrumental": a new version, not karaoke
     if _REMOVE_VOICE.search(text):
         return REMOVE
     if _KEEP_VOICE.search(text):
