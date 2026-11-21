@@ -1,8 +1,9 @@
-"""Changing a song the owner attached: more or less bass, with ffmpeg.
+"""Changing a song the owner attached, with ffmpeg: more or less bass, less noise.
 
-No AI is involved. It is the bass knob on a stereo: the song stays the
-same, only its low notes get louder (or softer). A limiter stops the louder
-bass from distorting.
+No AI is involved. The bass is the knob on a stereo: the song stays the
+same, only its low notes get louder (or softer), and a limiter stops the
+louder bass from distorting. Cleaning takes out clicks and crackle, then
+the steady hiss of old recordings (ffmpeg's adeclick and afftdn).
 """
 
 from __future__ import annotations
@@ -19,15 +20,26 @@ from friday.core.errors import FridayError
 BASS_FREQUENCY_HZ = 100
 
 
+# How much hiss is taken out (dB): normal, and when asked for "a lot".
+CLEAN_DB = 12
+CLEAN_MORE_DB = 20
+
+
 @dataclass(frozen=True, slots=True)
 class AudioEdit:
-    gain_db: float  # positive: more bass
+    gain_db: float  # positive: more bass, 0: bass unchanged
+    clean_db: float = 0  # noise taken out, 0: none
 
     @property
     def describe(self) -> str:
-        amount = abs(self.gain_db)
-        word = "more" if self.gain_db > 0 else "less"
-        return f"{word} bass ({'+' if self.gain_db > 0 else '-'}{amount:g} dB)"
+        parts = []
+        if self.clean_db:
+            parts.append("less noise" + (" (strong)" if self.clean_db > CLEAN_DB else ""))
+        if self.gain_db:
+            amount = abs(self.gain_db)
+            word = "more" if self.gain_db > 0 else "less"
+            parts.append(f"{word} bass ({'+' if self.gain_db > 0 else '-'}{amount:g} dB)")
+        return ", ".join(parts)
 
 
 _BASS = re.compile(r"\bbass\b", re.I)
@@ -52,11 +64,36 @@ _LOT = re.compile(
     r"\b(?:a\s+lot|lots|(?<!too\s)much|heavy|heavily|massive|huge|max(?:imum)?|really|very|tons|super)\b",
     re.I,
 )
+_NOISE = re.compile(
+    r"\b(?:noise|noisy|hiss\w*|crackl\w*|static|hum+ing|clicks?|clicking|pops|popping|"
+    r"de-?noise|clean(?:er)?(?:\s+up)?|clear(?:er)?(?:\s+up)?|restore|old\s+recording)\b",
+    re.I,
+)
+# "remove the noise", "clear the noisy sound": about the noise, not the bass.
+_NOISE_PHRASE = re.compile(
+    r"\b(?:remove|reduce|cut|lower|less|clear|clean|get\s+rid\s+of|take\s+out|fix)\b"
+    r"(?:\s+\S+){0,4}?\s+(?:noise|noisy|hiss\w*|crackl\w*|static|hum+ing|clicks?|pops)\b"
+    r"(?:\s+sound)?",
+    re.I,
+)
+_NOT_ENOUGH = re.compile(r"\b(?:not|still|yet|again|more|stronger|isn'?t|didn'?t)\b", re.I)
 _DB = re.compile(r"([+-]?\d+(?:\.\d+)?)\s*(?:db|decibels?)\b", re.I)
 
 
 def parse_audio_edit(text: str) -> AudioEdit | None:
     """What to do to an attached song, or None when the words don't say."""
+    clean = 0.0
+    if _NOISE.search(text):
+        # "noise is not removed yet", "still noisy": the last try wasn't enough.
+        stronger = _LOT.search(text) or _NOT_ENOUGH.search(text)
+        clean = CLEAN_MORE_DB if stronger else CLEAN_DB
+    gain = _bass_gain(_NOISE_PHRASE.sub(" ", text))
+    if gain is None and not clean:
+        return None
+    return AudioEdit(gain or 0.0, clean)
+
+
+def _bass_gain(text: str) -> float | None:
     if not _BASS.search(text) or _NEW_PART.search(text):
         return None
     less = bool(_LESS.search(text))
@@ -70,7 +107,7 @@ def parse_audio_edit(text: str) -> AudioEdit | None:
         gain = 3.0
     else:
         gain = 6.0
-    return AudioEdit(-gain if less else gain)
+    return -gain if less else gain
 
 
 def wants_new_part(text: str) -> bool:
@@ -91,7 +128,10 @@ def find_ffmpeg(configured: str = "") -> str | None:
 def output_name(source: Path, edit: AudioEdit, folder: Path) -> Path:
     ext = source.suffix.lower() if source.suffix.lower() in {".mp3", ".wav", ".flac"} else ".mp3"
     stem = re.sub(r"[^\w\- ]+", "", source.stem).strip() or "song"
-    tag = "bass" if edit.gain_db > 0 else "less-bass"
+    tags = (["clean"] if edit.clean_db else []) + (
+        ["bass" if edit.gain_db > 0 else "less-bass"] if edit.gain_db else []
+    )
+    tag = "+".join(tags)
     folder.mkdir(parents=True, exist_ok=True)
     number = 1
     while (path := folder / f"{stem} ({tag} {number}){ext}").exists():
@@ -100,9 +140,18 @@ def output_name(source: Path, edit: AudioEdit, folder: Path) -> Path:
 
 
 def ffmpeg_args(ffmpeg: str, source: Path, target: Path, edit: AudioEdit) -> list[str]:
-    filters = f"bass=g={edit.gain_db:g}:f={BASS_FREQUENCY_HZ}:w=0.6"
+    steps = []
+    if edit.clean_db:
+        # Clicks first, then hiss; tn follows hiss that changes over the song.
+        # Measured on a 1960s film song: hiss (6-10 kHz) -10 dB normal, -18 dB strong,
+        # while the music itself moved 1.5-3 dB.
+        floor = -25 if edit.clean_db > CLEAN_DB else -40
+        steps += ["adeclick", f"afftdn=nr={edit.clean_db:g}:nf={floor}:tn=1"]
+    if edit.gain_db:
+        steps.append(f"bass=g={edit.gain_db:g}:f={BASS_FREQUENCY_HZ}:w=0.6")
     if edit.gain_db > 0:
-        filters += ",alimiter=limit=0.95:level=disabled"
+        steps.append("alimiter=limit=0.95:level=disabled")
+    filters = ",".join(steps)
     args = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-i", str(source), "-vn", "-af", filters]
     if target.suffix == ".mp3":
         args += ["-c:a", "libmp3lame", "-q:a", "0"]

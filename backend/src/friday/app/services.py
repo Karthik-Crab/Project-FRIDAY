@@ -39,19 +39,27 @@ log = logging.getLogger(__name__)
 Event = dict[str, Any]
 _SPOKEN = {"image": "picture", "music": "music", "audio_edit": "song"}
 _MAX_ENGINES = 20  # conversations kept in memory; older ones are rebuilt from the store
+_PICTURE_WORD = re.compile(r"\b(?:pictures?|images?|photos?|drawings?|paintings?)\b", re.I)
+_SONG_MEMORY = 12  # a song attached within this many messages is "the song"
+# Talk about the song that needs a true answer, not the talking model's guess.
+_SONG_TALK = re.compile(
+    r"\b(?:again|retry|redo|done|ready|finished|saved?|where|file|folder|location|"
+    r"difference|different|changed?|work(?:ed|ing)?|lying|not\s+removed|still)\b",
+    re.I,
+)
 _UPLOAD_ID = re.compile(r"^[0-9a-f]{32}$")
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
 _NEW_PART_REPLY = (
     "Playing a new instrument part on top of a song isn't set up on this computer. "
-    'I can make the bass stronger or softer: say "add some bass" or "less bass".'
+    'I can clean it or change the bass: say "remove the noise", "add some bass" or "less bass".'
 )
 _SONG_REPLY = (
-    "I've got the song. I can make its bass stronger or softer: "
-    'say "add some bass", "a lot more bass" or "less bass".'
+    "I've got the song. I can take out hiss and crackle, or make its bass stronger or "
+    'softer: say "remove the noise", "add some bass", "a lot more bass" or "less bass".'
 )
 _SONG_AI_REPLY = (
     "I've got the song. What should I do with it? For example:\n"
-    '- "add some bass" or "less bass" (quick, a few seconds)\n'
+    '- "remove the noise", "add some bass" or "less bass" (quick, a few seconds)\n'
     '- "add a funky bass line", "add drums", "add a piano part" (a new part played by AI)\n'
     '- "give me just the vocals" (pull one instrument out)\n'
     '- "make it a jazz version" (a new style)\n'
@@ -204,6 +212,7 @@ class AppServices:
         engine = self._engines.pop(conversation_id, None)
         if engine is None:
             engine = self._make_engine(conversation_id)
+            engine.app_note = self._files_note()
             _load_history(engine, self.store.messages(conversation_id), self._history_text)
         self._engines[conversation_id] = engine  # newest last
         while len(self._engines) > _MAX_ENGINES:
@@ -212,6 +221,70 @@ class AppServices:
                 break
             del self._engines[oldest]
         return engine
+
+    def _files_note(self) -> str:
+        where = []
+        if self.studio is not None:
+            where.append(f"pictures it makes are saved in {_home(self.studio.output_dir)}")
+        if self.audio_dir is not None:
+            where.append(f"music and changed songs are saved in {_home(self.audio_dir)}")
+        return (
+            "You cannot open, change, clean, convert or save files yourself. Songs and "
+            "pictures are changed only by the app's own tools, which show a card with the "
+            "new file in this chat. Never say you are processing, trying again, have "
+            "changed or have saved a file, and never guess a file's name or folder: "
+            "nothing happened unless a card shows it. If they want a song changed, "
+            'tell them to attach it and say what to change ("remove the noise", '
+            '"more bass", "add drums"). '
+            + (f"On this computer, {'; '.join(where)}." if where else "")
+        )
+
+    def _recent_song(self, cid: str) -> Upload | None:
+        """The latest version of the song in this chat (within the last few turns):
+        the newest changed copy, or else the song as attached. So "remove the
+        noise" after "more bass" keeps the bass."""
+        for message in reversed(self.store.messages(cid)[-_SONG_MEMORY:]):
+            if (
+                message.kind == "job"
+                and message.meta.get("kind") == "audio_edit"
+                and message.meta.get("status") == "done"
+                and message.file
+                and Path(message.file).is_file()
+            ):
+                path = Path(message.file)
+                return Upload(f"job{message.id}", path.name, "audio", path)
+            for f in reversed(message.meta.get("files") or []):
+                if f.get("category") == "audio":
+                    try:
+                        return self.upload(str(f["id"]))
+                    except FridayError:
+                        return None
+        return None
+
+    def _song_status(self, cid: str) -> str:
+        """A true answer to "is it done?" / "where is it?" about the song."""
+        jobs = [
+            m
+            for m in self.store.messages(cid)
+            if m.kind == "job" and m.meta.get("kind") == "audio_edit"
+        ]
+        last = jobs[-1] if jobs else None
+        how = (
+            'Say what to change, for example "remove the noise", "a lot more bass", '
+            '"add drums" or "make it a jazz version", and I\'ll use the same song.'
+        )
+        if last is None:
+            return f"I haven't changed the song yet. {how}"
+        status = last.meta.get("status")
+        if status in ("running", "waiting"):
+            return f"I'm still working on it ({last.content}). The card above shows when it's done."
+        if status == "done" and last.file:
+            return (
+                f"Nothing new has been changed since the last card. The last changed song "
+                f"({last.content}) is saved here:\n\n`{_home(Path(last.file))}`\n\n"
+                f"You can also play or download it from its card above. {how}"
+            )
+        return f"The last change didn't work: {last.meta.get('error') or 'no reason given'}. {how}"
 
     def _lock(self, conversation_id: str) -> asyncio.Lock:
         return self._turn_locks.setdefault(conversation_id, asyncio.Lock())
@@ -233,6 +306,17 @@ class AppServices:
             return cid
         if uploads:
             return await self._chat_with_files(cid, text, uploads, think)
+        song = self._recent_song(cid)
+        if song is not None and _is_song_change(text, self.song_ai is not None):
+            # "remove the noise", "add drums" after a song: the same song again.
+            return await self._chat_with_files(cid, text, [song], think)
+        if song is not None and _SONG_TALK.search(text) and not _PICTURE_WORD.search(text):
+            # "is it done?", "where is it saved?", "try again": answered from what
+            # really happened, not by the talking model (which once made it up).
+            self._title_from(cid, text)
+            self._emit_message(self.store.add(cid, "user", "text", text))
+            self._say(cid, text, self._song_status(cid))
+            return cid
         self._title_from(cid, text)
         self._emit_message(self.store.add(cid, "user", "text", text))
         request = parse_request(text) if self.studio else None
@@ -309,9 +393,9 @@ class AppServices:
                 else ""
             )
         self._title_from(cid, text or uploads[0].name)
-        message = self.store.add(
-            cid, "user", "text", text, meta={"files": [u.to_json() for u in uploads]}
-        )
+        # A changed copy from an earlier card is not an upload: it is named, not attached.
+        attached = [u.to_json() for u in uploads if not u.id.startswith("job")]
+        message = self.store.add(cid, "user", "text", text, meta={"files": attached})
         self._emit_message(message)
         said = self._history_text(message, read_documents=False)
 
@@ -828,3 +912,18 @@ def _load_history(
         if not window.messages or window.messages[-1].role is not Role.USER:
             window.add_user("(no message)")
         window.add_assistant(text)
+
+
+def _is_song_change(text: str, ai: bool) -> bool:
+    """Words that ask for a change to the song (the quick ones, or the AI ones)."""
+    if parse_audio_edit(text) is not None:
+        return True
+    return ai and parse_song_task(text) is not None
+
+
+def _home(path: Path) -> str:
+    """A path as the owner would type it: ~/Music/FRIDAY rather than /home/name/..."""
+    try:
+        return "~/" + path.expanduser().relative_to(Path.home()).as_posix()
+    except ValueError:
+        return str(path)

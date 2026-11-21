@@ -77,6 +77,8 @@ class ConversationEngine:
         self.think: bool | None = None
         self.delegate = delegate
         self.notes = notes
+        # Extra facts for the model from the app (where files go, what it can't do).
+        self.app_note: str | None = None
         self.studio = studio
 
     def is_control(self, text: str) -> bool:
@@ -137,6 +139,7 @@ class ConversationEngine:
             self._delegate_context(),
             self._studio_context(),
             self.notes.context() if self.notes else None,
+            self.app_note,
         ]
         return "\n\n".join(p for p in parts if p) or None
 

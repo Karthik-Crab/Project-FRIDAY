@@ -546,3 +546,78 @@ def test_the_stop_button_ends_the_answer_and_keeps_what_was_written(tmp_path: Pa
         assert "stopped" not in again["meta"]
     history = services.engine(cid).window
     assert "word0" in str(history.messages)
+
+
+# Noise, and talking about the song afterwards (what went wrong on 2026-11-21:
+# follow-ups went to the talking model, which said it had saved a file in Downloads)
+
+
+@pytest.mark.parametrize(
+    ("text", "edit"),
+    [
+        ("can you clear the old music noisy sound and bass boost this song?", AudioEdit(6.0, 12)),
+        ("noise is not removed yet", AudioEdit(0.0, 20)),  # asked again: stronger
+        ("remove the hiss", AudioEdit(0.0, 12)),
+        ("remove a lot of the crackle", AudioEdit(0.0, 20)),
+        ("remove the noise and boost the bass", AudioEdit(6.0, 12)),
+        ("clean it up and less bass", AudioEdit(-6.0, 12)),
+    ],
+)
+def test_noise_requests(text: str, edit: AudioEdit) -> None:
+    assert parse_audio_edit(text) == edit
+
+
+def test_cleaning_command(tmp_path: Path) -> None:
+    song = tmp_path / "Old Song.mp3"
+    both = AudioEdit(6.0, 12)
+    assert both.describe == "less noise, more bass (+6 dB)"
+    assert output_name(song, both, tmp_path).name == "Old Song (clean+bass 1).mp3"
+    args = ffmpeg_args("ffmpeg", song, tmp_path / "o.mp3", both)
+    assert args[args.index("-af") + 1] == (
+        "adeclick,afftdn=nr=12:nf=-40:tn=1,bass=g=6:f=100:w=0.6,alimiter=limit=0.95:level=disabled"
+    )
+    clean = ffmpeg_args("ffmpeg", song, tmp_path / "o.mp3", AudioEdit(0.0, 20))
+    assert clean[clean.index("-af") + 1] == "adeclick,afftdn=nr=20:nf=-25:tn=1"
+
+
+@pytest.mark.skipif(FFMPEG is None, reason="ffmpeg is not installed")
+def test_follow_ups_use_the_same_song_and_get_true_answers(tmp_path: Path) -> None:
+    services, talk, _ = _app(tmp_path, ffmpeg=FFMPEG)
+    with _client(services) as client, client.websocket_connect("/ws", headers=HOST) as ws:
+        song = _upload(client, "Old Song.wav", _wav(tmp_path / "s.wav"))
+        ws.send_json({"type": "chat", "text": "what can you do with this?", "files": [song["id"]]})
+        cid = _until(ws, "message", lambda e: e["message"]["role"] == "assistant")["message"][
+            "conversation_id"
+        ]
+
+        def ask(text: str) -> dict[str, Any]:
+            ws.send_json({"type": "chat", "conversation_id": cid, "text": text})
+            reply = _until(ws, "message", lambda e: e["message"]["role"] == "assistant")
+            return dict(reply["message"])
+
+        assert "haven't changed the song yet" in ask("is it done?")["content"]
+        job = ask("noise is not removed yet")  # no song attached: the same one is used
+        assert job["kind"] == "job" and job["content"] == "Old Song.wav: less noise (strong)"
+        done = _until(
+            ws,
+            "message_update",
+            lambda e: e["message"]["id"] == job["id"] and e["message"]["meta"]["status"] == "done",
+        )["message"]
+        where = ask("where is it saved?")["content"]
+        assert str(tmp_path / "Music" / done["file_name"]) in where
+        # Asked again, it builds on the cleaned copy and cleans harder.
+        again = ask("remove the noise")
+        assert again["content"] == "Old Song (clean 1).wav: less noise"
+        _until(ws, "message_update", lambda e: e["message"]["meta"].get("status") == "done")
+        # Pictures are not the song: the talking model answers (it knows the folders).
+        ws.send_json({"type": "chat", "conversation_id": cid, "text": "where are pictures saved?"})
+        _until(ws, "stream_end", lambda e: True)
+        assert len(talk.requests) == 1
+        assert done["file_name"] in where and "Downloads" not in where
+
+
+def test_the_talking_model_is_told_it_cannot_change_files(tmp_path: Path) -> None:
+    services, _, _ = _app(tmp_path)
+    note = services.engine(services.conversation_id(None)).build_request().system
+    assert "You cannot open, change, clean, convert or save files yourself" in note
+    assert "music and changed songs are saved in" in note
