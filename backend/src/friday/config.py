@@ -155,7 +155,8 @@ class StudioSettings(_Strict):
     comfyui_command: list[str] = Field(default_factory=list)
     start_timeout_s: float = Field(default=180.0, ge=10, le=900)
     job_timeout_s: float = Field(default=600.0, ge=10, le=7200)
-    # Where finished files are saved. "" = Pictures/FRIDAY in your home folder.
+    # Where finished files are saved. "" = Pictures/FRIDAY (pictures) and
+    # Music/FRIDAY (music) in your home folder.
     output_dir: str = ""
     open_results: bool = True
     # Talking models on the graphics card: set aside and unloaded during a job
@@ -171,11 +172,15 @@ class StudioSettings(_Strict):
     image_steps: int = Field(default=30, ge=1, le=150)
     image_cfg: float = Field(default=4.5, ge=1.0, le=20.0)
     image_negative: str = "blurry, low quality, deformed, watermark, text"
-    # An API-format workflow file for music, with {{prompt}} (style),
-    # {{lyrics}} and {{seconds}}. "" = no music yet.
+    # Music: the ACE-Step 1.5 all-in-one checkpoint for the built-in workflow.
+    # "" = no music. Or an API-format workflow file with {{prompt}} (style),
+    # {{lyrics}} and {{seconds}}, which takes precedence.
+    music_checkpoint: str = ""
     music_workflow: str = ""
     music_seconds: int = Field(default=30, ge=5, le=600)
     music_lyrics: str = "[instrumental]"
+    music_bpm: int = Field(default=110, ge=40, le=240)
+    music_key: str = "C major"
 
     @field_validator("comfyui_url")
     @classmethod

@@ -81,7 +81,7 @@ def _studio(config: FridayConfig, router: ProviderRouter) -> StudioDelegate | No
         return None
     from friday.conversation.studio import Kind, Workflow
     from friday.integrations.comfyui import ComfyClient, ComfyLauncher, load_workflow
-    from friday.integrations.workflows import sdxl_text_to_image
+    from friday.integrations.workflows import ace_step_music, sdxl_text_to_image
 
     workflows: dict[Kind, Workflow] = {
         Kind.IMAGE: Workflow(
@@ -98,10 +98,18 @@ def _studio(config: FridayConfig, router: ProviderRouter) -> StudioDelegate | No
             },
         )
     }
-    if st.music_workflow:
+    if st.music_workflow or st.music_checkpoint:
         workflows[Kind.MUSIC] = Workflow(
-            load_workflow(Path(st.music_workflow).expanduser()),
-            {"seconds": st.music_seconds, "lyrics": st.music_lyrics},
+            load_workflow(Path(st.music_workflow).expanduser())
+            if st.music_workflow
+            else ace_step_music(),
+            {
+                "checkpoint": st.music_checkpoint,
+                "seconds": float(st.music_seconds),
+                "lyrics": st.music_lyrics,
+                "bpm": st.music_bpm,
+                "key": st.music_key,
+            },
         )
     launcher = None
     if st.comfyui_command:
@@ -110,9 +118,10 @@ def _studio(config: FridayConfig, router: ProviderRouter) -> StudioDelegate | No
             log_path=default_config_path().parent / "comfyui.log",
             start_timeout_s=st.start_timeout_s,
         )
-    output = (
-        Path(st.output_dir).expanduser() if st.output_dir else Path.home() / "Pictures" / "FRIDAY"
-    )
+    if st.output_dir:
+        output = music = Path(st.output_dir).expanduser()
+    else:
+        output, music = Path.home() / "Pictures" / "FRIDAY", Path.home() / "Music" / "FRIDAY"
     return StudioDelegate(
         ComfyClient(st.comfyui_url),
         workflows,
@@ -122,6 +131,7 @@ def _studio(config: FridayConfig, router: ProviderRouter) -> StudioDelegate | No
         gpu_providers=st.gpu_providers,
         timeout_s=st.job_timeout_s,
         open_results=st.open_results,
+        music_dir=music,
     )
 
 

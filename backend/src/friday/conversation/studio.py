@@ -168,10 +168,12 @@ class StudioDelegate:
         open_results: bool = True,
         on_done: Callable[[Notice], None] | None = None,
         opener: Callable[[Path], None] = open_file,
+        music_dir: Path | None = None,
     ) -> None:
         self.comfy = comfy
         self.workflows = dict(workflows)
         self.output_dir = output_dir
+        self.music_dir = music_dir or output_dir
         self.launcher = launcher
         self.router = router
         self.gpu_providers = tuple(gpu_providers)
@@ -272,7 +274,8 @@ class StudioDelegate:
             filled = fill_workflow(workflow.template, {**workflow.values, "prompt": request.prompt})
             prompt_id = await self.comfy.queue(filled)
             files = await self.comfy.wait(prompt_id, self.timeout_s)
-            saved = [await self.comfy.download(f, self.output_dir) for f in files]
+            folder = self.music_dir if request.kind is Kind.MUSIC else self.output_dir
+            saved = [await self.comfy.download(f, folder) for f in files]
             path = saved[0]
             spoken = self._ready_words(request.kind, len(saved))
             if self.open_results:

@@ -122,7 +122,7 @@ share_with_claude_code = true    # pass the notes to Claude Code along with a ta
 enabled = false
 comfyui_url = "http://127.0.0.1:8188"   # this machine only (ComfyUI has no login)
 comfyui_command = []             # started when needed, e.g. ["comfy", "--workspace", "~/ComfyUI", "launch"]
-output_dir = ""                  # "" = Pictures/FRIDAY in your home folder
+output_dir = ""                  # "" = Pictures/FRIDAY and Music/FRIDAY in your home folder
 open_results = true
 gpu_providers = []               # talking models on the graphics card, e.g. ["gpu"]: unloaded
                                  # during a job; she talks through the next one in her route
@@ -132,6 +132,9 @@ image_checkpoint = "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"
 image_width = 1024
 image_height = 1024
 image_steps = 30
-music_workflow = ""              # API-format workflow with {{prompt}}, {{lyrics}}, {{seconds}}
+music_checkpoint = ""            # e.g. "ace_step_1.5_turbo_aio.safetensors" turns on music (ACE-Step 1.5)
+music_workflow = ""              # or an API-format workflow with {{prompt}}, {{lyrics}}, {{seconds}}
 music_seconds = 30
 music_lyrics = "[instrumental]"
+music_bpm = 110
+music_key = "C major"

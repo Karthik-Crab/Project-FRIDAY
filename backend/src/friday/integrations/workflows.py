@@ -52,3 +52,73 @@ def sdxl_text_to_image() -> dict[str, Any]:
             "inputs": {"filename_prefix": "FRIDAY", "images": ["8", 0]},
         },
     }
+
+
+def ace_step_music() -> dict[str, Any]:
+    """Text to music with ACE-Step 1.5 (the all-in-one checkpoint).
+
+    The graph of ComfyUI's "ACE-Step 1.5 checkpoint" template, saving MP3.
+    ``{{prompt}}`` is the style ("calm piano, rainy evening"), ``{{lyrics}}``
+    the words or ``[instrumental]``, ``{{seconds}}`` the length.
+    """
+    return {
+        "97": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "{{checkpoint}}"},
+        },
+        "78": {
+            "class_type": "ModelSamplingAuraFlow",
+            "inputs": {"model": ["97", 0], "shift": 3.0},
+        },
+        "94": {
+            "class_type": "TextEncodeAceStepAudio1.5",
+            "inputs": {
+                "clip": ["97", 1],
+                "tags": "{{prompt}}",
+                "lyrics": "{{lyrics}}",
+                "seed": "{{seed}}",
+                "bpm": "{{bpm}}",
+                "duration": "{{seconds}}",
+                "timesignature": "4",
+                "language": "en",
+                "keyscale": "{{key}}",
+                "generate_audio_codes": True,
+                "cfg_scale": 2.0,
+                "temperature": 0.85,
+                "top_p": 0.9,
+                "top_k": 0,
+                "min_p": 0.0,
+            },
+        },
+        "47": {
+            "class_type": "ConditioningZeroOut",
+            "inputs": {"conditioning": ["94", 0]},
+        },
+        "98": {
+            "class_type": "EmptyAceStep1.5LatentAudio",
+            "inputs": {"seconds": "{{seconds}}", "batch_size": 1},
+        },
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": "{{seed}}",
+                "steps": 8,
+                "cfg": 1.0,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["78", 0],
+                "positive": ["94", 0],
+                "negative": ["47", 0],
+                "latent_image": ["98", 0],
+            },
+        },
+        "18": {
+            "class_type": "VAEDecodeAudio",
+            "inputs": {"samples": ["3", 0], "vae": ["97", 2]},
+        },
+        "106": {
+            "class_type": "SaveAudioMP3",
+            "inputs": {"audio": ["18", 0], "filename_prefix": "FRIDAY/music", "quality": "V0"},
+        },
+    }

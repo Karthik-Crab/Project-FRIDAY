@@ -437,8 +437,10 @@ async def test_music_without_a_workflow_says_so(tmp_path: Path) -> None:
 async def test_music_fills_seconds(tmp_path: Path) -> None:
     fake = FakeComfy()
     studio, notices, _ = _studio(fake, tmp_path, music=True)
+    studio.music_dir = tmp_path / "music"
     notice = await studio.make(Request(Kind.MUSIC, "calm piano"))
     assert fake.queued[0]["1"]["inputs"] == {"tags": "calm piano", "len": 30}
+    assert notice.log_path is not None and notice.log_path.parent == tmp_path / "music"
     assert notice.ok and notice.spoken == "Your music is ready. I've opened it."
     assert notices == []  # make() returns the notice; on_done is for background jobs
 
@@ -537,3 +539,31 @@ def test_router_hold_skips_but_never_leaves_nothing() -> None:
     assert router.held == frozenset()
     with pytest.raises(ValueError):
         router.hold("nope")
+
+
+def test_built_in_music_workflow_needs_only_known_values() -> None:
+    from friday.integrations.workflows import ace_step_music
+
+    template = ace_step_music()
+    assert placeholders(template) == {
+        "checkpoint",
+        "prompt",
+        "lyrics",
+        "seed",
+        "bpm",
+        "seconds",
+        "key",
+    }
+    filled = fill_workflow(
+        template,
+        {
+            "checkpoint": "ace.safetensors",
+            "prompt": "calm piano",
+            "lyrics": "[instrumental]",
+            "bpm": 110,
+            "seconds": 30,
+            "key": "C major",
+        },
+    )
+    assert filled["94"]["inputs"]["seed"] == filled["3"]["inputs"]["seed"]
+    assert filled["98"]["inputs"]["seconds"] == 30

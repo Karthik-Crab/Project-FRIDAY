@@ -34,12 +34,65 @@ system snapshot. Found on 2026-11-21:
   `FRIDAY-linux-studio.img` on the Windows partition** (`nvme0n1p3`, label
   "OS", 74 GB left free for Windows), formatted ext4, label `friday-studio`,
   UUID `13cafa71-3f51-4eb3-b6be-4a9bcf526749`. No partition was resized. It
-  is to be mounted at `~/local-ai/studio` and hold ComfyUI and Ollama's
+  is to be mounted at `/mnt/studio` (Ollama runs as its own user and cannot
+  read the home folder) and hold ComfyUI and Ollama's
   models. Not mounted yet (needs the owner's `sudo`). Do not delete that file
   from Windows.
-- Code: pictures and music by voice (ROADMAP M1.3n). Tested automatically
-  only (195 passed, on a temporary Python 3.14 environment since 3.13 is
-  missing); ComfyUI is not installed yet.
+- Code: pictures and music by voice (ROADMAP M1.3n).
+- The owner then mounted `/mnt/studio` (fstab, loop) and reinstalled Python
+  3.13 and 3.11; both environments work again. Ollama's models now live on
+  `/mnt/studio/ollama` (systemd override); `llama3.1:8b` pulled: 5.3 GB,
+  100% on the graphics card, 96 tokens/s, first load 23 s.
+- **ComfyUI** 0.46.0 (git `0072b86`) at `/mnt/studio/ComfyUI`, own `.venv`
+  (Python 3.13, torch 2.15.0+cu132). `extra_model_paths.yaml` also points at
+  `/mnt/ai-hdd/ai-models/comfyui/...`. FRIDAY starts it on demand
+  (`[studio] comfyui_command`), log in `~/.config/friday/comfyui.log`.
+  Config: a `gpu` provider (`llama3.1:8b`) first on every route, `local` CPU
+  model behind it; `gpu_providers = ["gpu"]`.
+
+### Pictures, run on the PC (`friday make image "..."`)
+
+| Run | Checkpoint on | Total | ComfyUI's own time |
+|---|---|---|---|
+| 1 (ComfyUI not running) | models drive (HDD) | 167 s | 155.7 s |
+| 2 | models drive (HDD) | 145 s | 142.6 s |
+| 3 | studio drive (`/mnt/studio`) | **26 s** | 23.9 s |
+
+- Juggernaut XL v9, 1024×1024, 30 steps, about 2 steps/s. Peak graphics
+  memory 7526 MiB of 8192. Each time: ComfyUI started if needed, `llama3.1:8b`
+  unloaded first, the picture saved to `~/Pictures/FRIDAY` and opened,
+  ComfyUI freed the card, `llama3.1:8b` back on the card afterwards
+  (`ollama ps`).
+- **Finding:** files on the models drive (NTFS through ntfs-3g) are read again
+  from the disk on every job (about 100 MB/s, so 70 to 90 s for a 7 GB
+  checkpoint); the Linux file cache does not keep them. A copy on the studio
+  drive (ext4) is cached and the load takes seconds. So: **checkpoints FRIDAY
+  uses belong in `/mnt/studio/ComfyUI/models/checkpoints`**. The original
+  stays in `ai-models/juggernaut-xl` on the models drive.
+
+### Music, run on the PC (`friday make music "..."`)
+
+- ACE-Step 1.5's files on the models drive are the original Hugging Face
+  layout, which ComfyUI cannot load. Downloaded ComfyUI's all-in-one file
+  `ace_step_1.5_turbo_aio.safetensors` (10.0 GB, from
+  `Comfy-Org/ace_step_1.5_ComfyUI_files`, no login) into the studio drive's
+  checkpoints folder. FRIDAY has a built-in workflow for it (the graph of
+  ComfyUI's "ACE-Step 1.5 checkpoint" template, 8 steps, MP3 out), turned on
+  by `music_checkpoint`.
+- First track: "calm lo-fi piano with soft rain, relaxing evening mood",
+  instrumental, 30 s stereo 48 kHz MP3, **20 s** total (ComfyUI 13.1 s,
+  including the first load). Peak graphics memory 7552 MiB. `llama3.1:8b` back
+  afterwards. Music is saved to `~/Music/FRIDAY`.
+- ComfyUI's log shows a harmless triton message (`Python.h: No such file`,
+  the Python development headers are not installed); the job finishes
+  normally. `sudo dnf install python3.13-devel` would silence it.
+
+### Not yet done
+
+- Voice test with the owner ("make a picture of ...", "yes").
+- Chatterbox and ComfyUI together on the card (memory not measured).
+- Windows Fast Startup off (`powercfg /h off`) the next time in Windows, so
+  the Windows partition holding the studio file is always cleanly closed.
 
 ---
 
