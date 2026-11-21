@@ -198,6 +198,13 @@ async def _handle(services: AppServices, ws: WebSocket, data: Any) -> None:
                 [str(f) for f in files],
                 think if isinstance(think, bool) else None,
             )
+        elif (
+            kind == "make"
+            and data.get("proposal_id") is None
+            and services.wants_song_change(cid, str(data.get("prompt", "")))
+        ):
+            # Typed on the Music tab, but it's about the song in this chat.
+            result["conversation_id"] = await services.chat(cid, str(data.get("prompt", "")))
         elif kind == "make":
             proposal = data.get("proposal_id")
             job = services.make(

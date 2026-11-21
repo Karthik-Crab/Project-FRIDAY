@@ -34,6 +34,10 @@ from friday.integrations.audio_tools import (
 )
 from friday.integrations.song_ai import SongEditor, SongTask, parse_song_task
 from friday.integrations.song_ai import output_path as song_output_path
+from friday.integrations.vocals import VocalSplitter, parse_vocal_task
+from friday.integrations.vocals import describe as vocals_describe
+from friday.integrations.vocals import note as vocals_note
+from friday.integrations.vocals import output_name as vocals_output_name
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +46,12 @@ _SPOKEN = {"image": "picture", "music": "music", "audio_edit": "song"}
 _MAX_ENGINES = 20  # conversations kept in memory; older ones are rebuilt from the store
 _PICTURE_WORD = re.compile(r"\b(?:pictures?|images?|photos?|drawings?|paintings?)\b", re.I)
 _SONG_WORD = re.compile(r"\b(?:songs?|music|track|audio|mp3|recording|tune)\b", re.I)
+_NEW_MUSIC = re.compile(
+    r"\b(?:make|create|generate|compose|write)\s+(?:me\s+)?(?:a|an|new|another|some)\b", re.I
+)
+_NO_VOCALS_REPLY = (
+    "Taking the singing out of a song needs Demucs, and it isn't set up on this computer yet."
+)
 _ATTACH_SONG_REPLY = (
     "I don't have a song in this chat to change. Attach it with the 📎 button and say what "
     'to do, for example "remove the noise" or "add some bass". You\'ll see a card while '
@@ -68,7 +78,7 @@ _SONG_AI_REPLY = (
     "I've got the song. What should I do with it? For example:\n"
     '- "remove the noise", "add some bass" or "less bass" (quick, a few seconds)\n'
     '- "add a funky bass line", "add drums", "add a piano part" (a new part played by AI)\n'
-    '- "give me just the vocals" (pull one instrument out)\n'
+    '- "remove the vocals" (karaoke) or "just the vocals" (about a minute)\n'
     '- "make it a jazz version" (a new style)\n'
     '- "redo 0:30 to 0:45 with a guitar solo" (remake one stretch)\n'
     "The AI ones take a few minutes."
@@ -123,6 +133,7 @@ class AppServices:
         document_chars: int = 14_000,
         can_think: bool = False,
         song_ai: SongEditor | None = None,
+        vocals: VocalSplitter | None = None,
     ) -> None:
         self.store = store
         self.uploads_dir = uploads_dir
@@ -131,6 +142,7 @@ class AppServices:
         self.can_see = can_see
         self.can_think = can_think
         self.song_ai = song_ai
+        self.vocals = vocals
         self.document_chars = document_chars
         self._make_engine = make_engine
         self.studio = studio
@@ -183,7 +195,7 @@ class AppServices:
             "can_read": {
                 "image": self.can_see,
                 "document": True,
-                "audio": bool(self.audio_dir and (self.ffmpeg or self.song_ai)),
+                "audio": bool(self.audio_dir and (self.ffmpeg or self.song_ai or self.vocals)),
             },
         }
 
@@ -413,6 +425,15 @@ class AppServices:
         said = self._history_text(message, read_documents=False)
 
         songs = [u for u in uploads if u.category == "audio"]
+        vocal = parse_vocal_task(text) if songs else None
+        if vocal is not None and not (self.vocals and self.audio_dir):
+            self._say(cid, said, _NO_VOCALS_REPLY)
+            return cid
+        if vocal is not None:
+            for song in songs:
+                self._start_vocal_job(cid, song, vocal)
+            self._remember(cid, said, f"(splitting the song: {vocals_describe(vocal)})")
+            return cid
         if songs:
             edit = parse_audio_edit(text)
             task = None if edit else parse_song_task(text)
@@ -667,6 +688,59 @@ class AppServices:
             )
         self._emit_message(done, "message_update")
         self._remember(done.conversation_id, "(changing the song)", self._history_text(done))
+
+    def _start_vocal_job(self, cid: str, song: Upload, mode: str) -> int:
+        job = self.store.add(
+            cid,
+            "assistant",
+            "job",
+            f"{song.name}: {vocals_describe(mode)}",
+            meta={"kind": "audio_edit", "vocals": mode, "status": "running", "source": song.id},
+        )
+        self._emit_message(job)
+        task = asyncio.get_running_loop().create_task(self._run_vocal_job(job.id, song, mode))
+        self._jobs[job.id] = task
+        task.add_done_callback(lambda _: self._jobs.pop(job.id, None))
+        return job.id
+
+    async def _run_vocal_job(self, job_id: int, song: Upload, mode: str) -> None:
+        assert self.vocals is not None and self.audio_dir is not None
+        loop = asyncio.get_running_loop()
+        begun = loop.time()
+        try:
+            target = vocals_output_name(song.path, mode, self.audio_dir)
+            await self.vocals.run(song.path, mode, target)
+        except asyncio.CancelledError:
+            self._emit_message(
+                self.store.update(job_id, meta={"status": "cancelled"}), "message_update"
+            )
+            raise
+        except Exception as exc:  # never leave a job spinning
+            log.exception("splitting the song failed")
+            done = self.store.update(job_id, meta={"status": "failed", "error": str(exc)})
+        else:
+            done = self.store.update(
+                job_id,
+                file=str(target),
+                meta={
+                    "status": "done",
+                    "seconds": round(loop.time() - begun),
+                    "note": vocals_note(mode),
+                },
+            )
+        self._emit_message(done, "message_update")
+        self._remember(done.conversation_id, "(splitting the song)", self._history_text(done))
+
+    def wants_song_change(self, conversation_id: str | None, text: str) -> bool:
+        """A request typed on the Music tab that is really about the song already
+        in this chat ("remove the vocals"), not a request for new music."""
+        if not conversation_id or _NEW_MUSIC.search(text):
+            return False
+        try:
+            song = self._recent_song(conversation_id)
+        except FridayError:
+            return False
+        return song is not None and _is_song_change(text, self.song_ai is not None)
 
     def _start_song_job(self, cid: str, song: Upload, task: SongTask) -> int:
         busy = self.studio is not None and self.studio.queued_or_running
@@ -933,7 +1007,7 @@ def _load_history(
 
 def _is_song_change(text: str, ai: bool) -> bool:
     """Words that ask for a change to the song (the quick ones, or the AI ones)."""
-    if parse_audio_edit(text) is not None:
+    if parse_audio_edit(text) is not None or parse_vocal_task(text) is not None:
         return True
     return ai and parse_song_task(text) is not None
 

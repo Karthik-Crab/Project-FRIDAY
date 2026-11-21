@@ -39,6 +39,7 @@ from friday.llm.router import ProviderRouter
 
 if TYPE_CHECKING:
     from friday.integrations.song_ai import SongEditor
+    from friday.integrations.vocals import VocalSplitter
 from friday.persona.persona import Channel, Mode, Persona
 
 log = logging.getLogger("friday")
@@ -618,6 +619,18 @@ def _song_ai(config: FridayConfig, here: Path, ffmpeg: str | None) -> SongEditor
     return SongEditor(client, launcher, stop_after=c.stop_after, ffmpeg=ffmpeg)
 
 
+def _vocals(config: FridayConfig) -> VocalSplitter | None:
+    """Demucs for taking the singing out of songs, if it is set up."""
+    from friday.integrations.vocals import VocalSplitter
+
+    c = config.vocals
+    if not (c.enabled and c.command):
+        return None
+    return VocalSplitter(
+        c.command, env=c.env, model=c.model, device=c.device, timeout_s=c.timeout_s
+    )
+
+
 def _model_list(
     config: FridayConfig, router: ProviderRouter, studio: StudioDelegate | None
 ) -> list[dict[str, str]]:
@@ -735,6 +748,16 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
                 "where": "graphics card, ACE-Step, only while working",
             },
         )
+    if config.vocals.enabled:
+        models.insert(
+            len(models) - (2 if config.voice.tts_server_url else 1),
+            {
+                "role": "Takes the singing out",
+                "label": f"Demucs {config.vocals.model}",
+                "model": config.vocals.model,
+                "where": "processor" if config.vocals.device == "cpu" else "graphics card",
+            },
+        )
     ffmpeg = find_ffmpeg(config.app.ffmpeg)
     if ffmpeg is None:
         log.warning("ffmpeg not found: changing attached songs is off")
@@ -751,6 +774,7 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
         document_chars=config.app.document_chars,
         can_think=any(p.think is not None for p in config.providers.values()),
         song_ai=_song_ai(config, here, ffmpeg),
+        vocals=_vocals(config),
     )
     port = config.app.port
     server = uvicorn.Server(

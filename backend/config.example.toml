@@ -184,3 +184,10 @@ url = "http://127.0.0.1:8001"
 model = "acestep-v15-base"
 steps = 50                       # more: better and slower
 stop_after = true                # stop the server after each change (gives its memory back)
+
+# Taking the singing out of songs (or keeping only the singing) with Demucs.
+# [vocals]
+# enabled = true
+# command = ["/path/to/demucs/.venv/bin/python", "-m", "demucs.separate"]
+# model = "htdemucs"
+# device = "cpu"    # "cuda" is faster but needs the graphics card

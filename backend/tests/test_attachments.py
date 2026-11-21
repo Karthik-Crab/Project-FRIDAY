@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import struct
+import sys
 import wave
 from collections.abc import Callable
 from dataclasses import replace
@@ -665,3 +666,43 @@ def test_heavy_bass_and_noises_is_more_bass_and_cleaning() -> None:
     assert edit is not None and edit.gain_db == 10 and edit.clean_db > 0
     assert parse_audio_edit("remove the bass and add reverb") == AudioEdit(-6.0)
     assert "louder" in edit_note(edit) and "not AI" in edit_note(edit)
+
+
+def test_remove_the_vocals_from_the_music_tab_changes_the_song(tmp_path: Path) -> None:
+    from friday.integrations.vocals import VocalSplitter
+
+    script = tmp_path / "fake_demucs.py"
+    script.write_text(
+        "import sys\nfrom pathlib import Path\na=sys.argv[1:]\n"
+        "o=Path(a[a.index('-o')+1])/'m'/'s'\no.mkdir(parents=True)\n"
+        "(o/'no_vocals.mp3').write_text('music')\n(o/'vocals.mp3').write_text('voice')\n"
+    )
+    services, talk, _ = _app(tmp_path, ffmpeg="ffmpeg")
+    services.vocals = VocalSplitter([sys.executable, str(script)])
+    with _client(services) as client, client.websocket_connect("/ws", headers=HOST) as ws:
+        song = _upload(client, "Old Song.wav", _wav(tmp_path / "s.wav"))
+        ws.send_json({"type": "chat", "text": "hold this", "files": [song["id"]]})
+        cid = _until(ws, "message", lambda e: e["message"]["role"] == "assistant")["message"][
+            "conversation_id"
+        ]
+        # The owner had the Music tab selected: this used to make a new 30 s clip.
+        ws.send_json(
+            {
+                "type": "make",
+                "conversation_id": cid,
+                "kind": "music",
+                "prompt": "can you remove the vocals only?",
+            }
+        )
+        done = _until(
+            ws,
+            "message_update",
+            lambda e: e["message"]["meta"].get("status") in ("done", "failed"),
+        )["message"]
+        assert done["meta"]["status"] == "done", done["meta"]
+        assert done["content"] == "Old Song.wav: singing taken out"
+        stored = services.store.message(done["id"])
+        assert stored is not None and stored.file is not None
+        assert Path(stored.file).name == "Old Song (no vocals 1).mp3"
+        assert Path(stored.file).read_text() == "music"
+    assert talk.requests == []

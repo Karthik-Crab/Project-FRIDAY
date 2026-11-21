@@ -244,6 +244,19 @@ class SongAISettings(_Strict):
         return _this_machine_only("song_ai.url", value)
 
 
+class VocalSettings(_Strict):
+    """Taking the singing out of a song (or keeping only the singing): Demucs,
+    run as its own program."""
+
+    enabled: bool = False
+    # How to start it, e.g. ["/path/demucs/.venv/bin/python", "-m", "demucs.separate"].
+    command: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    model: str = "htdemucs"
+    device: str = "cpu"  # "cuda" is faster but needs the graphics card
+    timeout_s: float = Field(default=1800.0, ge=60, le=7200)
+
+
 class FridayConfig(_Strict):
     user_name: str = "Karthik"
     default_mode: Mode = Mode.COMPANION
@@ -258,6 +271,7 @@ class FridayConfig(_Strict):
     studio: StudioSettings = Field(default_factory=StudioSettings)
     app: AppSettings = Field(default_factory=AppSettings)
     song_ai: SongAISettings = Field(default_factory=SongAISettings)
+    vocals: VocalSettings = Field(default_factory=VocalSettings)
 
     @model_validator(mode="after")
     def _check_routes(self) -> FridayConfig:
