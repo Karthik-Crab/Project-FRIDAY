@@ -62,6 +62,10 @@ class ProviderRouter:
     def providers(self) -> dict[str, LLMProvider]:
         return dict(self._providers)
 
+    def has_route(self, purpose: str) -> bool:
+        """Whether ``purpose`` has its own route (not just the default)."""
+        return bool(self._routes.get(purpose))
+
     def set_override(self, name: str | None) -> None:
         if name is not None and name not in self._providers:
             raise ValueError(f"unknown provider '{name}'")

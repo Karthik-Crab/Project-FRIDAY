@@ -25,6 +25,8 @@ realtime = ["websockets>=13", "sounddevice>=0.4.6"]
 secrets = ["keyring>=24"]
 # The chat app in the browser (`friday app`).
 app = ["fastapi>=0.110", "uvicorn>=0.29", "websockets>=13"]
+# Reading attached PDF, Word and Excel files in the chat app.
+documents = ["pypdf>=4", "python-docx>=1.1", "openpyxl>=3.1"]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
@@ -63,5 +65,5 @@ packages = ["friday"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["sounddevice", "faster_whisper", "kokoro_onnx", "keyring"]
+module = ["sounddevice", "faster_whisper", "kokoro_onnx", "keyring", "pypdf", "docx", "openpyxl"]
 ignore_missing_imports = true

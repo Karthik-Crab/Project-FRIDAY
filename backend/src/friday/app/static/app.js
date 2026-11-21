@@ -8,6 +8,7 @@ const els = {
   voice: $("voice-toggle"), voiceLabel: $("voice-label"), voiceBar: $("voice-bar"),
   voiceStatus: $("voice-status"), voicePartial: $("voice-partial"), models: $("models"),
   sidebar: $("sidebar"), toast: $("toast"), chips: $("chips"), hint: $("hint"),
+  tray: $("tray"), attach: $("attach"), fileInput: $("file-input"), drop: $("drop"),
 };
 
 const state = {
@@ -21,9 +22,17 @@ const state = {
   requests: new Map(),
   nextRequest: 1,
   timers: new Map(),
+  attachments: [],        // files picked for the next message: {key, id, name, category, uploading, preview}
 };
 
-const SPOKEN = { image: "picture", music: "music" };
+const SPOKEN = { image: "picture", music: "music", audio_edit: "song" };
+const ICON = { image: "🖼", audio: "🎵", document: "📄" };
+const KIND_OF = (name) => {
+  const ext = (name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
+  if ([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"].includes(ext)) return "image";
+  if ([".mp3", ".wav", ".flac", ".ogg", ".oga", ".opus", ".m4a", ".aac"].includes(ext)) return "audio";
+  return "document";
+};
 const PLACEHOLDER = {
   chat: "Message FRIDAY…",
   image: "Describe the picture… e.g. a white cat on a garden fence in the rain",
@@ -238,7 +247,7 @@ async function renameConversation(c) {
 }
 
 async function deleteConversation(c) {
-  if (!confirm(`Delete “${c.title}”? Pictures and music stay saved on the computer.`)) return;
+  if (!confirm(`Delete “${c.title}”? Pictures, music and changed songs stay saved on the computer.`)) return;
   await api(`/api/conversations/${c.id}`, { method: "DELETE" });
 }
 
@@ -292,7 +301,13 @@ function renderMessage(m) {
   if (m.role === "user") {
     const badge = m.meta.make ? `<span class="pill">${SPOKEN[m.meta.make] === "picture" ? "Picture" : "Music"}</span>` : "";
     const voice = m.meta.voice ? "<span>🎙 spoken</span>" : "";
-    el.innerHTML = `<div class="bubble">${esc(m.content)}</div>${badge || voice ? `<div class="tag">${badge}${voice}</div>` : ""}`;
+    const files = (m.meta.files || []).map((f) => {
+      const url = `/uploads/${encodeURIComponent(f.id)}`;
+      if (f.category === "image") return `<a href="${url}" target="_blank"><img src="${url}" alt="${esc(f.name)}" loading="lazy"></a>`;
+      if (f.category === "audio") return `<div class="doc">🎵 ${esc(f.name)}</div><audio controls preload="metadata" src="${url}"></audio>`;
+      return `<a class="doc" href="${url}" download="${esc(f.name)}">📄 ${esc(f.name)}</a>`;
+    }).join("");
+    el.innerHTML = `${files ? `<div class="files">${files}</div>` : ""}${m.content ? `<div class="bubble">${esc(m.content)}</div>` : ""}${badge || voice ? `<div class="tag">${badge}${voice}</div>` : ""}`;
     return el;
   }
   if (m.kind === "proposal") return renderProposal(el, m);
@@ -337,20 +352,21 @@ function renderJob(el, m) {
   state.timers.delete(m.id);
   let inner = `<div class="card-head">`;
   if (st === "running" || st === "waiting") {
-    inner += `<span class="spinner"></span><b>${st === "waiting" ? "Waiting for the previous job" : `Making the ${what}`}</b><span class="elapsed"></span>`;
+    const doing = what === "song" ? "Changing the song" : `Making the ${what}`;
+    inner += `<span class="spinner"></span><b>${st === "waiting" ? "Waiting for the previous job" : doing}</b><span class="elapsed"></span>`;
   } else if (st === "done") {
-    inner += `<b>${what === "picture" ? "Picture" : "Music"}</b>`;
+    inner += `<b>${{ picture: "Picture", music: "Music", song: "Changed song" }[what]}</b>`;
   } else if (st === "cancelled") {
     inner += `<b>Cancelled</b> · ${what}`;
   } else {
-    inner += `<b>Couldn't make the ${what}</b>`;
+    inner += `<b>${what === "song" ? "Couldn't change the song" : `Couldn't make the ${what}`}</b>`;
   }
   inner += `</div><p class="prompt">${esc(m.content)}</p>`;
   if (st === "running" || st === "waiting") {
     inner += `<div class="progress"></div><div class="card-actions"><button class="btn" data-act="cancel">Cancel</button></div>`;
   } else if (st === "done" && m.file_name) {
     const url = `/files/${m.id}`;
-    inner += m.meta.kind === "music"
+    inner += m.meta.kind === "music" || m.meta.kind === "audio_edit"
       ? `<audio controls preload="metadata" src="${url}"></audio>`
       : `<a href="${url}" target="_blank"><img src="${url}" alt="${esc(m.content)}" loading="lazy"></a>`;
     inner += `<div class="meta">${m.meta.seconds ? `<span>${m.meta.seconds} s</span>` : ""}<a href="${url}" download="${esc(m.file_name)}">Download</a><span>${esc(m.file_name)}</span></div>`;
@@ -384,14 +400,18 @@ function startDraft(id) {
 
 async function submit(text) {
   text = text.trim();
-  if (!text) return;
+  const files = state.attachments;
+  if (files.some((a) => a.uploading)) { toast("Wait a moment: the file is still being attached."); return; }
+  if (!text && !files.length) return;
   els.input.value = "";
+  state.attachments = [];
+  renderTray();
   autosize();
-  const mode = state.mode;
+  const mode = files.length ? "chat" : state.mode;
   try {
     let reply;
     if (mode === "chat") {
-      reply = await sendWithConversation({ type: "chat", text });
+      reply = await sendWithConversation({ type: "chat", text, files: files.map((a) => a.id) });
     } else {
       reply = await sendWithConversation({ type: "make", kind: mode, prompt: text });
     }
@@ -399,7 +419,59 @@ async function submit(text) {
   } catch (e) {
     toast(e.message);
     if (!els.input.value) { els.input.value = text; autosize(); }
+    if (!state.attachments.length && files.length) { state.attachments = files; renderTray(); }
   }
+}
+
+// ---- attaching files -----------------------------------------------------
+
+async function attachFiles(list) {
+  if (!state.status.can_attach) { toast("Attaching files isn't set up."); return; }
+  const can = state.status.can_read || {};
+  for (const file of list) {
+    const category = KIND_OF(file.name);
+    if (category === "image" && can.image === false) toast("Reading pictures isn't set up, so FRIDAY can't see this one.");
+    if (category === "audio" && can.audio === false) toast("Changing songs needs ffmpeg, which isn't installed.");
+    const a = {
+      key: Math.random().toString(36).slice(2), id: null, name: file.name, category, uploading: true,
+      preview: category === "image" ? URL.createObjectURL(file) : null,
+    };
+    state.attachments.push(a);
+    renderTray();
+    try {
+      const res = await fetch(`/api/upload?name=${encodeURIComponent(file.name)}`, {
+        method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || res.statusText);
+      Object.assign(a, data, { uploading: false });
+    } catch (e) {
+      toast(`${file.name}: ${e.message}`);
+      state.attachments = state.attachments.filter((x) => x !== a);
+    }
+    renderTray();
+  }
+  if (state.mode !== "chat") setMode("chat");
+  els.input.focus();
+}
+
+function renderTray() {
+  els.tray.innerHTML = "";
+  els.tray.classList.toggle("hidden", !state.attachments.length);
+  for (const a of state.attachments) {
+    const el = document.createElement("div");
+    el.className = "att" + (a.uploading ? " uploading" : "");
+    const pic = a.preview ? `<img src="${a.preview}" alt="">` : `<span class="ico">${ICON[a.category] || "📄"}</span>`;
+    const sub = a.uploading ? "attaching…" : { image: "picture", audio: "song", document: "document" }[a.category];
+    el.innerHTML = `${pic}<div style="min-width:0"><div class="name">${esc(a.name)}</div><div class="sub">${sub}</div></div><button type="button" class="x" title="Remove">✕</button>`;
+    el.querySelector(".x").onclick = () => {
+      state.attachments = state.attachments.filter((x) => x !== a);
+      renderTray();
+      autosize();
+    };
+    els.tray.appendChild(el);
+  }
+  autosize();
 }
 
 // A new chat gets its id from the server; then the page shows it.
@@ -431,7 +503,7 @@ function setMode(mode) {
 function autosize() {
   els.input.style.height = "auto";
   els.input.style.height = Math.min(els.input.scrollHeight, 220) + "px";
-  els.send.disabled = !els.input.value.trim();
+  els.send.disabled = !els.input.value.trim() && !state.attachments.length;
 }
 
 // ---- voice ---------------------------------------------------------------
@@ -486,6 +558,24 @@ $("new-chat").addEventListener("click", () => { openConversation(null); els.side
 $("open-sidebar").addEventListener("click", () => els.sidebar.classList.add("open"));
 $("close-sidebar").addEventListener("click", () => els.sidebar.classList.remove("open"));
 els.voice.addEventListener("click", toggleVoice);
+els.attach.addEventListener("click", () => els.fileInput.click());
+els.fileInput.addEventListener("change", () => { attachFiles([...els.fileInput.files]); els.fileInput.value = ""; });
+els.input.addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.length) { e.preventDefault(); attachFiles(files); }
+});
+let dragDepth = 0;
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+window.addEventListener("dragenter", (e) => { if (hasFiles(e)) { dragDepth++; els.drop.classList.remove("hidden"); } });
+window.addEventListener("dragleave", (e) => { if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; els.drop.classList.add("hidden"); } });
+window.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+window.addEventListener("drop", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  els.drop.classList.add("hidden");
+  attachFiles([...e.dataTransfer.files]);
+});
 window.addEventListener("hashchange", () => {
   const id = (location.hash.match(/^#\/c\/(\w+)/) || [])[1] || null;
   if (id !== state.current) openConversation(id);

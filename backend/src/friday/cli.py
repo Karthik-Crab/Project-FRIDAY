@@ -20,7 +20,7 @@ import contextlib
 import logging
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -129,6 +129,7 @@ def _studio(config: FridayConfig, router: ProviderRouter) -> StudioDelegate | No
         launcher=launcher,
         router=router,
         gpu_providers=st.gpu_providers,
+        gpu_occasional=st.gpu_occasional,
         timeout_s=st.job_timeout_s,
         open_results=st.open_results,
         music_dir=music,
@@ -302,11 +303,15 @@ def _print_voice_change(expressive: bool) -> None:
         print("  [expressive voice not available; using the built-in voice]")
 
 
-async def _warm_up_local(router: ProviderRouter, request: ChatRequest | None = None) -> None:
+async def _warm_up_local(
+    router: ProviderRouter, request: ChatRequest | None = None, skip: Sequence[str] = ()
+) -> None:
     """Load local models, and let them read the system prompt, before the
-    first question rather than during it."""
+    first question rather than during it. ``skip``: models used now and then."""
     loop = asyncio.get_running_loop()
-    for provider in router.providers.values():
+    for name, provider in router.providers.items():
+        if name in skip:
+            continue
         warm_up = getattr(provider, "warm_up", None)
         if provider.info.local and warm_up is not None:
             begun = loop.time()
@@ -598,6 +603,7 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
     from friday.app.services import AppServices
     from friday.app.store import ConversationStore
     from friday.app.voice import VoiceMode, real_session_builder
+    from friday.integrations.audio_tools import find_ffmpeg
     from friday.integrations.voice_service import VoiceServiceLauncher
 
     here = default_config_path().parent
@@ -649,17 +655,31 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
     models = [
         {
             "label": f"{p.info.model} · "
-            + ("graphics card" if name in card else "processor" if p.info.local else "online"),
+            + (
+                "graphics card"
+                if name in card or name in config.studio.gpu_occasional
+                else "processor"
+                if p.info.local
+                else "online"
+            ),
             "model": p.info.model,
         }
         for name, p in router.providers.items()
     ]
+    ffmpeg = find_ffmpeg(config.app.ffmpeg)
+    if ffmpeg is None:
+        log.warning("ffmpeg not found: changing attached songs is off")
     services = AppServices(
         ConversationStore(here / "conversations.db"),
         make_engine,
         studio=studio,
         voice=voice,
         models=models,
+        uploads_dir=here / "uploads",
+        audio_dir=studio.music_dir if studio else Path.home() / "Music" / "FRIDAY",
+        ffmpeg=ffmpeg,
+        can_see=router.has_route("vision"),
+        document_chars=config.app.document_chars,
     )
     port = config.app.port
     server = uvicorn.Server(
@@ -678,7 +698,7 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
 
             webbrowser.open(url)
         with contextlib.suppress(Exception):
-            await _warm_up_local(router)
+            await _warm_up_local(router, skip=config.studio.gpu_occasional)
 
     ready = asyncio.create_task(when_ready())
     try:

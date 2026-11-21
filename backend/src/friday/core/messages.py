@@ -20,6 +20,9 @@ class Role(StrEnum):
 class Message:
     role: Role
     content: str
+    # Pictures sent with this message, base64-encoded. Only models that can
+    # see (the "vision" route) are given them.
+    images: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

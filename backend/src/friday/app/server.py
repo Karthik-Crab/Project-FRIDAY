@@ -21,6 +21,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 
 from friday.app.services import AppServices
 from friday.core.errors import FridayError
+from friday.documents import category
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +112,28 @@ def create_app(services: AppServices, *, port: int | None = None) -> FastAPI:
         services.delete_conversation(conversation_id)
         return {"ok": True}
 
+    @app.post("/api/upload")
+    async def upload(request: Request, name: str) -> dict[str, Any]:
+        """A file attached in the chat box. The body is the file itself."""
+        try:
+            saved = await services.save_upload(name, request.stream())
+        except FridayError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return saved.to_json()
+
+    @app.get("/uploads/{upload_id}")
+    async def uploaded(upload_id: str) -> FileResponse:
+        path = services.upload_path(upload_id)
+        if path is None:
+            raise HTTPException(404, "no such file")
+        headers = {"Cache-Control": "max-age=86400", "X-Content-Type-Options": "nosniff"}
+        if category(path.name) == "document":
+            # Downloaded, never shown as a page here: an HTML file could run scripts.
+            return FileResponse(
+                path, headers=headers, filename=path.name, content_disposition_type="attachment"
+            )
+        return FileResponse(path, headers=headers)
+
     @app.get("/files/{message_id}")
     async def file(message_id: int) -> FileResponse:
         path = services.file_for(message_id)
@@ -165,7 +188,12 @@ async def _handle(services: AppServices, ws: WebSocket, data: Any) -> None:
     try:
         result: dict[str, Any] = {}
         if kind == "chat":
-            result["conversation_id"] = await services.chat(cid, str(data.get("text", "")))
+            files = data.get("files") or []
+            if not isinstance(files, list):
+                raise FridayError("files must be a list")
+            result["conversation_id"] = await services.chat(
+                cid, str(data.get("text", "")), [str(f) for f in files]
+            )
         elif kind == "make":
             proposal = data.get("proposal_id")
             job = services.make(

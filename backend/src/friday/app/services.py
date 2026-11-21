@@ -7,9 +7,13 @@ sends everything ``emit`` produces back to the browser.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import logging
-from collections.abc import Callable
+import re
+import uuid
+from collections.abc import AsyncIterator, Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -19,12 +23,41 @@ from friday.conversation.engine import ConversationEngine
 from friday.conversation.studio import Kind, Request, StudioDelegate, parse_request
 from friday.core.errors import FridayError
 from friday.core.messages import Role
+from friday.documents import DocumentError, category, extract_text, for_model
+from friday.integrations.audio_tools import (
+    AudioEdit,
+    apply_edit,
+    output_name,
+    parse_audio_edit,
+    wants_new_part,
+)
 
 log = logging.getLogger(__name__)
 
 Event = dict[str, Any]
-_SPOKEN = {"image": "picture", "music": "music"}
+_SPOKEN = {"image": "picture", "music": "music", "audio_edit": "song"}
 _MAX_ENGINES = 20  # conversations kept in memory; older ones are rebuilt from the store
+_UPLOAD_ID = re.compile(r"^[0-9a-f]{32}$")
+MAX_UPLOAD_BYTES = 300 * 1024 * 1024
+_NEW_PART_REPLY = (
+    "Playing a new instrument part on top of a song isn't ready yet; it's being worked on. "
+    'For now I can make the bass stronger or softer: say "add some bass" or "less bass".'
+)
+_SONG_REPLY = (
+    "I've got the song. For now I can make its bass stronger or softer: "
+    'say "add some bass", "a lot more bass" or "less bass".'
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Upload:
+    id: str
+    name: str
+    category: str  # image, audio, document
+    path: Path
+
+    def to_json(self) -> dict[str, str]:
+        return {"id": self.id, "name": self.name, "category": self.category}
 
 
 class VoiceControl(Protocol):
@@ -57,8 +90,18 @@ class AppServices:
         studio: StudioDelegate | None = None,
         voice: VoiceControl | None = None,
         models: list[dict[str, Any]] | None = None,
+        uploads_dir: Path | None = None,
+        audio_dir: Path | None = None,
+        ffmpeg: str | None = None,
+        can_see: bool = False,
+        document_chars: int = 14_000,
     ) -> None:
         self.store = store
+        self.uploads_dir = uploads_dir
+        self.audio_dir = audio_dir or (uploads_dir.parent / "edited" if uploads_dir else None)
+        self.ffmpeg = ffmpeg
+        self.can_see = can_see
+        self.document_chars = document_chars
         self._make_engine = make_engine
         self.studio = studio
         self.voice = voice
@@ -104,6 +147,12 @@ class AppServices:
             "voice_available": bool(self.voice and self.voice.available),
             "voice": self.voice.state if self.voice else "off",
             "voice_conversation": self.voice.conversation_id if self.voice else None,
+            "can_attach": self.uploads_dir is not None,
+            "can_read": {
+                "image": self.can_see,
+                "document": True,
+                "audio": bool(self.ffmpeg and self.audio_dir),
+            },
         }
 
     # Conversations
@@ -138,7 +187,7 @@ class AppServices:
         engine = self._engines.pop(conversation_id, None)
         if engine is None:
             engine = self._make_engine(conversation_id)
-            _load_history(engine, self.store.messages(conversation_id))
+            _load_history(engine, self.store.messages(conversation_id), self._history_text)
         self._engines[conversation_id] = engine  # newest last
         while len(self._engines) > _MAX_ENGINES:
             oldest = next(iter(self._engines))
@@ -152,11 +201,14 @@ class AppServices:
 
     # Chat
 
-    async def chat(self, conversation_id: str | None, text: str) -> str:
+    async def chat(self, conversation_id: str | None, text: str, files: Sequence[str] = ()) -> str:
         text = text.strip()
+        uploads = [self.upload(f) for f in files]
         cid = self.conversation_id(conversation_id)
-        if not text:
+        if not text and not uploads:
             return cid
+        if uploads:
+            return await self._chat_with_files(cid, text, uploads)
         self._title_from(cid, text)
         self._emit_message(self.store.add(cid, "user", "text", text))
         request = parse_request(text) if self.studio else None
@@ -172,11 +224,15 @@ class AppServices:
             self._emit_message(offer)
             self._remember(cid, text, f"(offered to make the {_SPOKEN[request.kind.value]})")
             return cid
+        await self._stream_reply(cid, text)
+        return cid
+
+    async def _stream_reply(self, cid: str, text: str, images: Sequence[str] = ()) -> None:
         async with self._lock(cid):
             engine = self.engine(cid)
-            draft = f"d{id(text)}"
+            draft = f"d{uuid.uuid4().hex[:12]}"
             self.emit({"type": "stream_start", "conversation_id": cid, "draft": draft})
-            async for delta in engine.respond(text):
+            async for delta in engine.respond(text, images):
                 self.emit({"type": "delta", "draft": draft, "text": delta})
             turn = engine.last_turn
             meta: dict[str, Any] = {"mode": turn.mode.value}
@@ -187,6 +243,52 @@ class AppServices:
                 meta["failed"] = True
             reply = self.store.add(cid, "assistant", "text", turn.full_text, meta=meta)
             self.emit({"type": "stream_end", "draft": draft, "message": reply.to_json()})
+
+    def _say(self, cid: str, said: str, reply: str) -> None:
+        """A fixed reply, without asking the talking model."""
+        self._emit_message(self.store.add(cid, "assistant", "text", reply))
+        self._remember(cid, said, reply)
+
+    async def _chat_with_files(self, cid: str, text: str, uploads: list[Upload]) -> str:
+        kinds = {u.category for u in uploads}
+        if not text:
+            text = (
+                "What's in this picture?"
+                if kinds == {"image"}
+                else "Summarise this document."
+                if kinds == {"document"}
+                else ""
+            )
+        self._title_from(cid, text or uploads[0].name)
+        message = self.store.add(
+            cid, "user", "text", text, meta={"files": [u.to_json() for u in uploads]}
+        )
+        self._emit_message(message)
+        said = self._history_text(message, read_documents=False)
+
+        songs = [u for u in uploads if u.category == "audio"]
+        if songs:
+            edit = parse_audio_edit(text)
+            if edit is None:
+                self._say(cid, said, _NEW_PART_REPLY if wants_new_part(text) else _SONG_REPLY)
+            elif not (self.ffmpeg and self.audio_dir):
+                self._say(cid, said, "Changing songs needs ffmpeg, and it isn't installed.")
+            else:
+                for song in songs:
+                    self._start_audio_job(cid, song, edit)
+                self._remember(cid, said, f"(changing the song: {edit.describe})")
+            return cid
+
+        try:
+            said = await asyncio.to_thread(self._history_text, message)
+        except DocumentError as exc:
+            self._say(cid, said, str(exc))
+            return cid
+        images: list[str] = []
+        for picture in (u for u in uploads if u.category == "image"):
+            data = await asyncio.to_thread(picture.path.read_bytes)
+            images.append(base64.b64encode(data).decode("ascii"))
+        await self._stream_reply(cid, said, images)
         return cid
 
     def notice(self, conversation_id: str, text: str, context: str) -> None:
@@ -303,6 +405,132 @@ class AppServices:
         task.cancel()
         return True
 
+    # Attached files
+
+    async def save_upload(self, name: str, chunks: AsyncIterator[bytes]) -> Upload:
+        """Keep a file the owner attached, until a message uses it."""
+        if self.uploads_dir is None:
+            raise FridayError("attaching files is not set up")
+        name = _safe_name(name)
+        kind = category(name)
+        if kind is None:
+            raise FridayError(
+                f"I can't use {Path(name).suffix or 'this kind of'} files. Pictures, songs "
+                "(mp3, wav, flac ...) and documents (pdf, docx, xlsx, txt ...) work."
+            )
+        upload_id = uuid.uuid4().hex
+        folder = self.uploads_dir / upload_id
+        folder.mkdir(parents=True)
+        path = folder / name
+        size = 0
+        try:
+            with path.open("wb") as out:
+                async for chunk in chunks:
+                    size += len(chunk)
+                    if size > MAX_UPLOAD_BYTES:
+                        raise FridayError(
+                            f"{name} is too big (over {MAX_UPLOAD_BYTES // 2**20} MB)."
+                        )
+                    out.write(chunk)
+        except BaseException:
+            path.unlink(missing_ok=True)
+            folder.rmdir()
+            raise
+        if size == 0:
+            path.unlink()
+            folder.rmdir()
+            raise FridayError(f"{name} is empty.")
+        return Upload(upload_id, name, kind, path)
+
+    def upload(self, upload_id: str) -> Upload:
+        path = self.upload_path(upload_id)
+        if path is None:
+            raise FridayError("that attached file is gone; please attach it again")
+        kind = category(path.name)
+        assert kind is not None
+        return Upload(upload_id, path.name, kind, path)
+
+    def upload_path(self, upload_id: str) -> Path | None:
+        if self.uploads_dir is None or not _UPLOAD_ID.match(upload_id):
+            return None
+        folder = self.uploads_dir / upload_id
+        files = (
+            [p for p in folder.iterdir() if p.is_file() and p.name != _TEXT_CACHE]
+            if (folder.is_dir())
+            else []
+        )
+        return files[0] if files else None
+
+    def _start_audio_job(self, cid: str, song: Upload, edit: AudioEdit) -> int:
+        job = self.store.add(
+            cid,
+            "assistant",
+            "job",
+            f"{song.name}: {edit.describe}",
+            meta={"kind": "audio_edit", "status": "running", "source": song.id},
+        )
+        self._emit_message(job)
+        task = asyncio.get_running_loop().create_task(self._run_audio_job(job.id, song, edit))
+        self._jobs[job.id] = task
+        task.add_done_callback(lambda _: self._jobs.pop(job.id, None))
+        return job.id
+
+    async def _run_audio_job(self, job_id: int, song: Upload, edit: AudioEdit) -> None:
+        assert self.ffmpeg and self.audio_dir
+        loop = asyncio.get_running_loop()
+        begun = loop.time()
+        try:
+            target = output_name(song.path, edit, self.audio_dir)
+            await apply_edit(self.ffmpeg, song.path, target, edit)
+        except asyncio.CancelledError:
+            self._emit_message(
+                self.store.update(job_id, meta={"status": "cancelled"}), "message_update"
+            )
+            raise
+        except Exception as exc:  # never leave a job spinning
+            log.exception("song change failed")
+            done = self.store.update(job_id, meta={"status": "failed", "error": str(exc)})
+        else:
+            done = self.store.update(
+                job_id,
+                file=str(target),
+                meta={"status": "done", "seconds": round(loop.time() - begun)},
+            )
+        self._emit_message(done, "message_update")
+        self._remember(done.conversation_id, "(changing the song)", self._history_text(done))
+
+    def _history_text(self, message: StoredMessage, read_documents: bool = True) -> str:
+        """How a saved message reads to the talking model."""
+        files = message.meta.get("files") if message.role == "user" else None
+        if not files:
+            return _history_text(message)
+        parts = [message.content] if message.content else []
+        for item in files:
+            name, kind = str(item.get("name")), item.get("category")
+            if kind == "image":
+                parts.append(f"[picture attached: {name}]")
+            elif kind == "audio":
+                parts.append(f"[song attached: {name}]")
+            elif kind == "document":
+                text = self._document_text(str(item.get("id"))) if read_documents else None
+                if text is None:
+                    parts.append(f"[document attached: {name}]")
+                else:
+                    parts.append(for_model(name, text, self.document_chars)[0])
+        return "\n\n".join(parts)
+
+    def _document_text(self, upload_id: str) -> str | None:
+        """The document's text, read once and kept beside it."""
+        path = self.upload_path(upload_id)
+        if path is None:
+            return None
+        cache = path.parent / _TEXT_CACHE
+        if cache.is_file():
+            return cache.read_text(encoding="utf-8")
+        text = extract_text(path)
+        cache.write_text(text, encoding="utf-8")
+        return text
+
     # Voice
 
     async def set_voice(self, on: bool, conversation_id: str | None) -> str | None:
@@ -418,6 +646,14 @@ class AppServices:
 
 
 _AUDIO = {".mp3", ".flac", ".wav", ".ogg", ".opus", ".m4a"}
+_TEXT_CACHE = ".text"
+
+
+def _safe_name(name: str) -> str:
+    """A file name that can't point outside its folder."""
+    name = Path(name.replace("\\", "/")).name.strip()
+    name = re.sub(r'[\x00-\x1f<>:"/\\|?*]+', "_", name).strip(". ")
+    return name[:120] or "file"
 
 
 def _history_text(message: StoredMessage) -> str:
@@ -426,6 +662,13 @@ def _history_text(message: StoredMessage) -> str:
     spoken = _SPOKEN.get(kind, "picture")
     if message.kind == "proposal":
         return f"(offered to make the {spoken})"
+    if message.kind == "job" and kind == "audio_edit":
+        status = message.meta.get("status")
+        if status == "done":
+            return f"I changed the song ({message.content}). It's in the chat."
+        if status == "failed":
+            return str(message.meta.get("error") or "I couldn't change the song.")
+        return f"(changing the song: {message.content})"
     if message.kind == "job":
         status = message.meta.get("status")
         if status == "done":
@@ -438,11 +681,18 @@ def _history_text(message: StoredMessage) -> str:
     return message.content
 
 
-def _load_history(engine: ConversationEngine, messages: list[StoredMessage]) -> None:
+def _load_history(
+    engine: ConversationEngine,
+    messages: list[StoredMessage],
+    as_text: Callable[[StoredMessage], str] = _history_text,
+) -> None:
     """Rebuild a conversation's short-term memory from what was saved."""
     window = engine.window
     for message in messages:
-        text = _history_text(message).strip()
+        try:
+            text = as_text(message).strip()
+        except DocumentError:
+            text = message.content.strip()
         if not text:
             continue
         if message.role == "user":

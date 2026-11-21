@@ -8,9 +8,9 @@ the desktop UI) are just different front-ends on top of ``respond``.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import aclosing
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from friday.conversation.delegation import CodeDelegate, is_agent_command, not_set_up_reply
 from friday.conversation.memory import INTERRUPTED_MARKER, ConversationWindow
@@ -18,7 +18,7 @@ from friday.conversation.notes import NoteBook
 from friday.conversation.studio import StudioDelegate, is_studio_command, parse_request
 from friday.conversation.studio import not_set_up_reply as studio_not_set_up
 from friday.core.errors import ProviderError
-from friday.core.messages import ChatRequest, Role
+from friday.core.messages import ChatRequest, Message, Role
 from friday.llm.base import ProviderInfo
 from friday.llm.router import ProviderRouter, StreamResult
 from friday.persona.commands import parse_command
@@ -29,6 +29,9 @@ log = logging.getLogger(__name__)
 # Which routing purpose each mode uses. Config decides which providers serve
 # each purpose; the engine never names a vendor.
 MODE_PURPOSE: dict[Mode, str] = {Mode.COMPANION: "conversation", Mode.WORK: "reasoning"}
+PICTURES_NOT_SET_UP = (
+    'I can\'t look at pictures yet: no model that can see is set up (the "vision" route).'
+)
 
 FAILURE_REPLY = (
     "Sorry, I can't reach any of my language models right now. Give me a moment and try again."
@@ -168,8 +171,14 @@ class ConversationEngine:
             "or describe it, unless that appears in this conversation."
         )
 
-    async def respond(self, user_text: str) -> AsyncGenerator[str, None]:
+    async def respond(
+        self, user_text: str, images: Sequence[str] = ()
+    ) -> AsyncGenerator[str, None]:
         """Yield the reply to ``user_text`` as text deltas.
+
+        ``images`` (base64) are pictures sent with the message: the "vision"
+        route answers, and only this turn's request carries them; history
+        keeps the words.
 
         History is updated even if the consumer stops early (barge-in): the
         generated-so-far text is stored, and the caller may then refine it with
@@ -181,61 +190,30 @@ class ConversationEngine:
         if not user_text:
             return
 
-        command = parse_command(user_text)
-        if command is not None:
-            self.mode = command.mode
-            turn.mode = command.mode
+        reply: str | None
+        if images and not self.router.has_route("vision"):
+            reply = PICTURES_NOT_SET_UP
             turn.was_command = True
-            ack = self.persona.mode_acknowledgement(command.mode)
-            turn.full_text = ack
-            yield ack
-            return  # commands are control, not conversation: not stored in history
-
-        if self.delegate is not None:
-            reply = self.delegate.handle(user_text)
-            if reply is not None:  # also control, not conversation
-                turn.was_command = True
-                turn.full_text = reply
-                yield reply
-                return
-        elif is_agent_command(user_text):
-            # Not switched on: say so in fixed words. Left to the model, it
-            # claimed to run the task and made up the result.
-            reply = not_set_up_reply()
-            turn.was_command = True
+        else:
+            reply = None if images else self._control(user_text, turn)
+        if reply is not None:
             turn.full_text = reply
             yield reply
             return
-
-        if self.studio is not None:
-            reply = self.studio.handle(user_text)
-            if reply is not None:
-                turn.was_command = True
-                turn.full_text = reply
-                yield reply
-                return
-        elif (asked := parse_request(user_text)) is not None:
-            reply = studio_not_set_up(asked.kind)
-            turn.was_command = True
-            turn.full_text = reply
-            yield reply
-            return
-
-        if self.notes is not None:
-            reply = self.notes.handle(user_text)
-            if reply is not None:  # stored on disk, not in the conversation
-                turn.was_command = True
-                turn.full_text = reply
-                yield reply
-                return
 
         self.window.add_user(user_text)
         turn.user_stored = True
         request = self.build_request()
+        purpose = MODE_PURPOSE[self.mode]
+        if images:
+            purpose = "vision"
+            last = request.messages[-1]
+            seen = Message(last.role, last.content, tuple(images))
+            request = replace(request, messages=(*request.messages[:-1], seen))
         result = StreamResult()
         parts: list[str] = []
         completed = False
-        stream = self.router.stream(MODE_PURPOSE[self.mode], request, result)
+        stream = self.router.stream(purpose, request, result)
         try:
             async with aclosing(stream):
                 async for delta in stream:
@@ -263,6 +241,44 @@ class ConversationEngine:
                 turn.full_text = text
                 self.window.add_assistant(text if completed else text + INTERRUPTED_MARKER)
                 turn.stored = True
+
+    def _control(self, user_text: str, turn: TurnInfo) -> str | None:
+        """A fixed reply when the words are a command or a task, not conversation."""
+        command = parse_command(user_text)
+        if command is not None:
+            self.mode = command.mode
+            turn.mode = command.mode
+            turn.was_command = True
+            ack = self.persona.mode_acknowledgement(command.mode)
+            return ack  # commands are control, not conversation: not stored in history
+
+        if self.delegate is not None:
+            reply = self.delegate.handle(user_text)
+            if reply is not None:  # also control, not conversation
+                turn.was_command = True
+                return reply
+        elif is_agent_command(user_text):
+            # Not switched on: say so in fixed words. Left to the model, it
+            # claimed to run the task and made up the result.
+            turn.was_command = True
+            return not_set_up_reply()
+
+        if self.studio is not None:
+            reply = self.studio.handle(user_text)
+            if reply is not None:
+                turn.was_command = True
+                return reply
+        elif (asked := parse_request(user_text)) is not None:
+            reply = studio_not_set_up(asked.kind)
+            turn.was_command = True
+            return reply
+
+        if self.notes is not None:
+            reply = self.notes.handle(user_text)
+            if reply is not None:  # stored on disk, not in the conversation
+                turn.was_command = True
+                return reply
+        return None
 
     def record_interruption(self, heard_text: str) -> None:
         """Replace the last reply with the part the user actually heard."""

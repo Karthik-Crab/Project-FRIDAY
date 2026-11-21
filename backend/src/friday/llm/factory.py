@@ -19,7 +19,13 @@ from friday.llm.router import ProviderRouter
 def build_provider(name: str, cfg: ProviderConfig, secrets: SecretStore) -> LLMProvider:
     api_key = secrets.get(cfg.api_key_name) if cfg.api_key_name else None
     if cfg.kind == "ollama":
-        return OllamaProvider(name, cfg.model, base_url=cfg.base_url or "http://127.0.0.1:11434")
+        return OllamaProvider(
+            name,
+            cfg.model,
+            base_url=cfg.base_url or "http://127.0.0.1:11434",
+            think=cfg.think,
+            num_ctx=cfg.num_ctx,
+        )
     if cfg.kind == "openai":
         base = cfg.base_url or "https://api.openai.com/v1"
         local = (

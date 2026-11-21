@@ -196,6 +196,7 @@ class StudioDelegate:
         launcher: ComfyLauncher | None = None,
         router: ProviderRouter | None = None,
         gpu_providers: Sequence[str] = (),
+        gpu_occasional: Sequence[str] = (),
         timeout_s: float = 600.0,
         open_results: bool = True,
         on_done: Callable[[Notice], None] | None = None,
@@ -209,6 +210,9 @@ class StudioDelegate:
         self.launcher = launcher
         self.router = router
         self.gpu_providers = tuple(gpu_providers)
+        # Card models used now and then (the one that reads pictures): set
+        # aside during a job like the others, but not loaded again afterwards.
+        self.gpu_occasional = tuple(gpu_occasional)
         self.timeout_s = timeout_s
         self.open_results = open_results
         self.on_done = on_done
@@ -357,7 +361,7 @@ class StudioDelegate:
         if self.router is None:
             return []
         held: list[str] = []
-        for name in self.gpu_providers:
+        for name in (*self.gpu_providers, *self.gpu_occasional):
             provider = self.router.providers.get(name)
             if provider is None:
                 continue
@@ -375,6 +379,8 @@ class StudioDelegate:
             return
         for name in held:
             self.router.release(name)
+            if name not in self.gpu_providers:
+                continue
             warm_up = getattr(self.router.providers.get(name), "warm_up", None)
             if warm_up is not None:  # load it again now, not on the next question
                 with contextlib.suppress(Exception):

@@ -37,6 +37,12 @@ class ProviderConfig(_Strict):
     send_temperature: bool | None = None
     # OpenAI kind only: older OpenAI-compatible servers expect "max_tokens".
     max_tokens_field: Literal["max_completion_tokens", "max_tokens"] = "max_completion_tokens"
+    # Ollama kind only: models that can "think" first (Qwen3, DeepSeek-R1).
+    # false = answer straight away (much sooner); None = the model's default.
+    think: bool | None = None
+    # Ollama kind only: how many tokens of the conversation the model reads
+    # at once. None = Ollama's default (4096). More uses more graphics memory.
+    num_ctx: int | None = Field(default=None, ge=512, le=131072)
 
 
 class VoiceSettings(_Strict):
@@ -168,6 +174,9 @@ class StudioSettings(_Strict):
     # so the card is free for ComfyUI. FRIDAY talks through the next one in
     # her route meanwhile, so that one should run on the CPU.
     gpu_providers: list[str] = Field(default_factory=list)
+    # Card models used now and then, such as the one that reads pictures:
+    # set aside during a job, but not loaded again afterwards.
+    gpu_occasional: list[str] = Field(default_factory=list)
     # "" = FRIDAY's built-in text-to-image workflow (one SDXL checkpoint).
     # Otherwise an API-format workflow file with {{prompt}} where the words go.
     image_workflow: str = ""
@@ -206,6 +215,11 @@ class AppSettings(_Strict):
 
     port: int = Field(default=8765, ge=1024, le=65535)
     open_browser: bool = True
+    # ffmpeg changes attached songs (more bass). "" = find it on the PATH.
+    ffmpeg: str = ""
+    # How much of an attached document the talking model reads (characters).
+    # About 4 characters a word-piece: keep it well inside the model's num_ctx.
+    document_chars: int = Field(default=14_000, ge=1_000, le=400_000)
 
 
 class FridayConfig(_Strict):

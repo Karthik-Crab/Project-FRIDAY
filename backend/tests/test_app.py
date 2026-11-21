@@ -51,6 +51,11 @@ def _client(services: AppServices) -> TestClient:
 _seen: dict[int, list[dict[str, Any]]] = {}
 
 
+@pytest.fixture(autouse=True)
+def _forget_events() -> None:
+    _seen.clear()  # a new connection may get an old one's id
+
+
 def _until(ws: Any, kind: str, check: Callable[[dict[str, Any]], bool] = lambda e: True) -> Any:
     """The next event of this kind. Others are kept: they may arrive in any order."""
     kept = _seen.setdefault(id(ws), [])

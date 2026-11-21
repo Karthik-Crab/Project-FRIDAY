@@ -47,7 +47,20 @@ async def test_ollama_request_and_stream() -> None:
     assert seen["body"]["messages"][0] == {"role": "system", "content": "be nice"}
     assert seen["body"]["stream"] is True
     assert seen["body"]["keep_alive"] == "30m"  # stay loaded between turns
+    assert "think" not in seen["body"]  # the model's own default
     assert p.info.local
+
+
+async def test_ollama_thinking_can_be_switched_off() -> None:
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, text=json.dumps({"message": {"content": "Hi"}, "done": True}))
+
+    p = OllamaProvider("gpu", "qwen3", client=client(handler, "http://x"), think=False)
+    assert await collect(p) == "Hi"
+    assert seen["body"]["think"] is False
 
 
 async def test_ollama_warm_up_loads_the_model_without_a_prompt() -> None:

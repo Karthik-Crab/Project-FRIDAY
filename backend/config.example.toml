@@ -17,6 +17,14 @@ log_level = "INFO"
 [providers.local]
 kind = "ollama"
 model = "llama3.2:3b"        # small enough to answer quickly on a CPU-only laptop
+# Ollama only:
+# num_ctx = 8192             # how much of the chat (and attached documents) it reads at once
+# think = false              # Qwen3 and other thinking models: answer straight away
+
+# A model that can see, for pictures attached in the chat app (route "vision").
+# [providers.vision]
+# kind = "ollama"
+# model = "gemma3:4b"
 
 [providers.claude]
 kind = "anthropic"
@@ -44,6 +52,7 @@ conversation = ["openai", "local"]
 reasoning = ["claude", "local"]
 default = ["local"]
 offline = ["local"]
+# vision = ["vision"]        # without this route, attached pictures can't be read
 
 # ---- voice ---------------------------------------------------------------
 
@@ -126,6 +135,8 @@ output_dir = ""                  # "" = Pictures/FRIDAY and Music/FRIDAY in your
 open_results = true
 gpu_providers = []               # talking models on the graphics card, e.g. ["gpu"]: unloaded
                                  # during a job; she talks through the next one in her route
+gpu_occasional = []              # graphics-card models used now and then, e.g. ["vision"]:
+                                 # set aside during a job, not loaded again afterwards
 image_workflow = ""              # "" = built-in SDXL text-to-image, or an API-format workflow
                                  # file (Workflow > Export (API)) with {{prompt}} where the words go
 image_checkpoint = "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"
@@ -146,6 +157,9 @@ music_key = "C major"
 [app]
 port = 8765
 open_browser = true
+ffmpeg = ""                      # "" = find ffmpeg on the PATH; needed for "add some bass" to a song
+document_chars = 14000           # how much of an attached document goes to the model
+                                 # (about 4 characters per token: keep below num_ctx)
 
 # To let the app start the expressive voice only while voice mode is on, add
 # under [voice] (adjust the paths):

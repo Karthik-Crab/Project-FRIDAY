@@ -147,6 +147,28 @@ system snapshot. Found on 2026-11-21:
 - RAM after these: 6 GB used by programs, 17 GB file cache (models), 24 GB
   available.
 
+### Qwen3, attached pictures, documents and songs
+
+- The owner asked for an uncensored 8B talking model. Pulled
+  `huihui_ai/qwen3-abliterated:8b-v2` (5.0 GB) and made it the `gpu`
+  provider in place of `llama3.1:8b`, with `think = false` (answers straight
+  away) and `num_ctx = 8192`. Settings backed up first as
+  `~/.config/friday/config.before-qwen.toml`.
+- Added `[providers.vision]` = `gemma3:4b` with route `vision = ["vision",
+  "local"]` (gemma3-cpu can see too, slower) and `[studio] gpu_occasional =
+  ["vision"]`.
+- Run on the PC through the app (2026-11-21):
+
+| Step | Time | Notes |
+|---|---|---|
+| Question | 0.6 s (first word 0.4 s) | Qwen, 6.0 GB, 100 % on the card |
+| Picture attached ("what is in this picture?") | 7.9 s | `gemma3:4b`: "a fox sitting in the snow", right |
+| Word document attached (an electricity bill) | 5.4 s | Qwen gave the right amount and date |
+| Song attached, "add some bass" | a few seconds | `music_00001 (bass 1).mp3`; below 120 Hz it is 2 dB louder on average (−22.5 → −20.5 dB) |
+| Music job with Qwen loaded | 19 s | Qwen back on the card afterwards; chat 0.5 s; gemma3:4b not loaded again |
+| Voice on | 23 s | Qwen split 57 % processor / 43 % card beside Chatterbox (slower replies while voice is on) |
+| Voice off | 2 s | Qwen 100 % on the card again |
+
 ### Not yet done
 
 - The owner trying the app.

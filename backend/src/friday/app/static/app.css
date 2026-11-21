@@ -185,7 +185,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .mode.active { background: var(--surface); border-color: var(--border); color: var(--text); }
 .input-row {
   display: flex; align-items: flex-end; gap: 8px; background: var(--surface);
-  border: 1px solid var(--border); border-radius: 18px; padding: 10px 10px 10px 16px; box-shadow: var(--shadow);
+  border: 1px solid var(--border); border-radius: 18px; padding: 10px 10px 10px 8px; box-shadow: var(--shadow);
 }
 .input-row:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); }
 textarea#input {
@@ -221,3 +221,40 @@ textarea#input {
   .bubble { max-width: 92%; }
   .voice-label { display: none; }
 }
+
+/* Attached files */
+.attach {
+  flex: none; border: 0; background: none; font-size: 18px; padding: 4px 6px; border-radius: 8px;
+  align-self: flex-end; color: var(--muted);
+}
+.attach:hover { background: var(--panel); }
+.tray { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
+.att {
+  display: flex; align-items: center; gap: 8px; max-width: 260px; padding: 6px 8px 6px 6px;
+  border: 1px solid var(--border); background: var(--surface); border-radius: 10px; font-size: 13px;
+}
+.att img, .att .ico {
+  width: 34px; height: 34px; border-radius: 6px; object-fit: cover; flex: none;
+  display: grid; place-items: center; background: var(--panel); font-size: 17px;
+}
+.att .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att .sub { color: var(--muted); font-size: 11px; }
+.att .x { border: 0; background: none; color: var(--muted); padding: 2px 4px; border-radius: 6px; }
+.att .x:hover { background: var(--panel); }
+.att.uploading { opacity: .6; }
+.files { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; margin-bottom: 6px; max-width: 85%; }
+.files img { max-width: 260px; max-height: 260px; border-radius: 12px; border: 1px solid var(--border); display: block; }
+.files audio { width: 300px; max-width: 100%; }
+.files .doc {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface); color: var(--text); text-decoration: none; font-size: 14px;
+}
+.drop {
+  position: fixed; inset: 0; background: color-mix(in srgb, var(--bg) 80%, transparent);
+  display: grid; place-items: center; z-index: 50; pointer-events: none;
+}
+.drop div {
+  border: 2px dashed var(--accent); border-radius: 18px; padding: 40px 60px; font-size: 18px;
+  background: var(--surface); color: var(--text);
+}
+.drop.hidden { display: none; }
