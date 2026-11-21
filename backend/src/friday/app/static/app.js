@@ -388,6 +388,7 @@ function renderJob(el, m) {
       ? `<audio controls preload="metadata" src="${url}"></audio>`
       : `<a href="${url}" target="_blank"><img src="${url}" alt="${esc(m.content)}" loading="lazy"></a>`;
     inner += `<div class="meta">${m.meta.seconds ? `<span>${m.meta.seconds} s</span>` : ""}<a href="${url}" download="${esc(m.file_name)}">Download</a><span>${esc(m.file_name)}</span></div>`;
+    if (m.meta.note) inner += `<p class="note">${esc(m.meta.note)}</p>`;
   } else if (st === "failed") {
     inner += `<div class="error">${esc(m.meta.error || "")}</div>`;
   }

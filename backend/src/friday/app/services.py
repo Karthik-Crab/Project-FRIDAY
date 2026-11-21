@@ -27,6 +27,7 @@ from friday.documents import DocumentError, category, extract_text, for_model
 from friday.integrations.audio_tools import (
     AudioEdit,
     apply_edit,
+    edit_note,
     output_name,
     parse_audio_edit,
     wants_new_part,
@@ -658,7 +659,11 @@ class AppServices:
             done = self.store.update(
                 job_id,
                 file=str(target),
-                meta={"status": "done", "seconds": round(loop.time() - begun)},
+                meta={
+                    "status": "done",
+                    "seconds": round(loop.time() - begun),
+                    "note": edit_note(edit),
+                },
             )
         self._emit_message(done, "message_update")
         self._remember(done.conversation_id, "(changing the song)", self._history_text(done))

@@ -83,11 +83,13 @@ def test_ffmpeg_command(tmp_path: Path) -> None:
     target = output_name(song, AudioEdit(6.0), tmp_path / "out")
     assert target.name == "My Song (bass 1).mp3"
     args = ffmpeg_args("ffmpeg", song, target, AudioEdit(6.0))
-    assert args[args.index("-af") + 1] == "bass=g=6:f=100:w=0.6,alimiter=limit=0.95:level=disabled"
+    assert args[args.index("-af") + 1] == (
+        "bass=g=6:f=150:w=0.8,equalizer=f=200:t=o:w=1.2:g=3.6,alimiter=limit=0.95:level=disabled"
+    )
     target.touch()
     assert output_name(song, AudioEdit(6.0), tmp_path / "out").name == "My Song (bass 2).mp3"
     softer = ffmpeg_args("ffmpeg", song, target, AudioEdit(-3.0))
-    assert softer[softer.index("-af") + 1] == "bass=g=-3:f=100:w=0.6"  # no limiter needed
+    assert softer[softer.index("-af") + 1] == "bass=g=-3:f=150:w=0.8"  # no limiter needed
 
 
 # Documents
@@ -574,7 +576,8 @@ def test_cleaning_command(tmp_path: Path) -> None:
     assert output_name(song, both, tmp_path).name == "Old Song (clean+bass 1).mp3"
     args = ffmpeg_args("ffmpeg", song, tmp_path / "o.mp3", both)
     assert args[args.index("-af") + 1] == (
-        "adeclick,afftdn=nr=12:nf=-40:tn=1,bass=g=6:f=100:w=0.6,alimiter=limit=0.95:level=disabled"
+        "adeclick,afftdn=nr=12:nf=-40:tn=1,bass=g=6:f=150:w=0.8,"
+        "equalizer=f=200:t=o:w=1.2:g=3.6,alimiter=limit=0.95:level=disabled"
     )
     clean = ffmpeg_args("ffmpeg", song, tmp_path / "o.mp3", AudioEdit(0.0, 20))
     assert clean[clean.index("-af") + 1] == "adeclick,afftdn=nr=20:nf=-25:tn=1"
@@ -653,3 +656,12 @@ def test_without_a_song_it_asks_for_one_instead_of_pretending(tmp_path: Path) ->
         said = _until(ws, "message", lambda e: e["message"]["role"] == "assistant")["message"]
         assert "Attach it with the 📎 button" in said["content"]
     assert talk.requests == []
+
+
+def test_heavy_bass_and_noises_is_more_bass_and_cleaning() -> None:
+    from friday.integrations.audio_tools import edit_note
+
+    edit = parse_audio_edit("Cool now add heavy bass to this song and remove all the noises")
+    assert edit is not None and edit.gain_db == 10 and edit.clean_db > 0
+    assert parse_audio_edit("remove the bass and add reverb") == AudioEdit(-6.0)
+    assert "louder" in edit_note(edit) and "not AI" in edit_note(edit)

@@ -17,7 +17,12 @@ from pathlib import Path
 from friday.core.errors import FridayError
 
 # Low shelf at 100 Hz: kick drum and bass guitar, below most voices.
-BASS_FREQUENCY_HZ = 100
+# Measured on the PC, a shelf at 100 Hz only lifted notes below 120 Hz, which
+# laptop and phone speakers barely play: the owner heard no difference. So
+# the shelf sits at 150 Hz, and more bass also gets a "punch" bump at 200 Hz.
+BASS_FREQUENCY_HZ = 150
+PUNCH_HZ = 200
+PUNCH_SHARE = 0.6  # the punch bump is this much of the bass gain
 
 
 # How much hiss is taken out (dB): normal, and when asked for "a lot".
@@ -55,7 +60,7 @@ _LESS = re.compile(
     re.I,
 )
 _MORE = re.compile(
-    r"\b(?:add|more|boost|increase|louder|stronger|heavier|deeper|pump|raise|turn\s+up|"
+    r"\b(?:add|more|boost|increase|louder|stronger|heavy|heavier|deeper|pump|raise|turn\s+up|"
     r"bump|punch|thump|fatter|extra|enhance)\w*",
     re.I,
 )
@@ -64,19 +69,23 @@ _LOT = re.compile(
     r"\b(?:a\s+lot|lots|(?<!too\s)much|heavy|heavily|massive|huge|max(?:imum)?|really|very|tons|super)\b",
     re.I,
 )
+_NOISE_WORD = (
+    r"(?:noises?|noisy|hiss\w*|crackl\w*|static|hum+(?:ing)?|clicks?|clicking|pops|popping|"
+    r"disturbances?|distortions?|background\s+sounds?)"
+)
 _NOISE = re.compile(
-    r"\b(?:noise|noisy|hiss\w*|crackl\w*|static|hum+ing|clicks?|clicking|pops|popping|"
-    r"de-?noise|clean(?:er)?(?:\s+up)?|clear(?:er)?(?:\s+up)?|restore|old\s+recording)\b",
+    rf"\b(?:{_NOISE_WORD}|de-?noise|clean(?:er)?(?:\s+up)?|clear(?:er)?(?:\s+up)?|"
+    r"restore|old\s+recording)\b",
     re.I,
 )
-# "remove the noise", "clear the noisy sound": about the noise, not the bass.
+# "remove all the noises", "clear the noisy sound": about the noise, not the bass.
 _NOISE_PHRASE = re.compile(
-    r"\b(?:remove|reduce|cut|lower|less|clear|clean|get\s+rid\s+of|take\s+out|fix)\b"
-    r"(?:\s+\S+){0,4}?\s+(?:noise|noisy|hiss\w*|crackl\w*|static|hum+ing|clicks?|pops)\b"
-    r"(?:\s+sound)?",
+    r"\b(?:remove|reduce|cut|lower|less|clear|clean|get\s+rid\s+of|take\s+out|fix|"
+    r"eliminate|kill|filter)\b"
+    rf"(?:\s+\S+){{0,4}}?\s+{_NOISE_WORD}(?:\s+sounds?)?\b",
     re.I,
 )
-_NOT_ENOUGH = re.compile(r"\b(?:not|still|yet|again|more|stronger|isn'?t|didn'?t)\b", re.I)
+_NOT_ENOUGH = re.compile(r"\b(?:not|still|yet|again|isn'?t|didn'?t)\b", re.I)
 _DB = re.compile(r"([+-]?\d+(?:\.\d+)?)\s*(?:db|decibels?)\b", re.I)
 
 
@@ -96,9 +105,22 @@ def parse_audio_edit(text: str) -> AudioEdit | None:
 def _bass_gain(text: str) -> float | None:
     if not _BASS.search(text) or _NEW_PART.search(text):
         return None
-    less = bool(_LESS.search(text))
-    if not less and not _MORE.search(text):
+    less_at = [m.start() for m in _LESS.finditer(text)]
+    more_at = [m.start() for m in _MORE.finditer(text)]
+    if not less_at and not more_at:
         return None
+    less = bool(less_at)
+    if less_at and more_at:
+        # "remove the hiss and boost the bass": the action word just before
+        # "bass" says what to do with it (else the nearest one after it).
+        bass = _BASS.search(text)
+        assert bass is not None
+        before = [(at, True) for at in less_at if at < bass.start()]
+        before += [(at, False) for at in more_at if at < bass.start()]
+        if before:
+            less = max(before)[1]
+        else:
+            less = min(less_at) < min(more_at)
     if match := _DB.search(text):
         gain = min(abs(float(match.group(1))), 15.0)
     elif _LOT.search(text):
@@ -108,6 +130,23 @@ def _bass_gain(text: str) -> float | None:
     else:
         gain = 6.0
     return -gain if less else gain
+
+
+def edit_note(edit: AudioEdit) -> str:
+    """Plain words for the card: what was done, and why it only takes seconds."""
+    done = []
+    if edit.clean_db:
+        strong = " (strong cleaning)" if edit.clean_db > CLEAN_DB else ""
+        done.append(f"took out clicks and the steady hiss{strong}")
+    if edit.gain_db > 0:
+        done.append("made the bass louder")
+    elif edit.gain_db < 0:
+        done.append("made the bass softer")
+    return (
+        "I " + " and ".join(done) + ". This is a sound filter, not AI, so it takes "
+        "seconds. Play the original and this one one after the other to hear it; the "
+        "difference is clearest on headphones. Ask again for a stronger change."
+    )
 
 
 def wants_new_part(text: str) -> bool:
@@ -148,8 +187,10 @@ def ffmpeg_args(ffmpeg: str, source: Path, target: Path, edit: AudioEdit) -> lis
         floor = -25 if edit.clean_db > CLEAN_DB else -40
         steps += ["adeclick", f"afftdn=nr={edit.clean_db:g}:nf={floor}:tn=1"]
     if edit.gain_db:
-        steps.append(f"bass=g={edit.gain_db:g}:f={BASS_FREQUENCY_HZ}:w=0.6")
+        steps.append(f"bass=g={edit.gain_db:g}:f={BASS_FREQUENCY_HZ}:w=0.8")
     if edit.gain_db > 0:
+        punch = round(edit.gain_db * PUNCH_SHARE, 1)
+        steps.append(f"equalizer=f={PUNCH_HZ}:t=o:w=1.2:g={punch:g}")
         steps.append("alimiter=limit=0.95:level=disabled")
     filters = ",".join(steps)
     args = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-i", str(source), "-vn", "-af", filters]

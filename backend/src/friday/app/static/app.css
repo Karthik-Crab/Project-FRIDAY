@@ -293,3 +293,5 @@ textarea#input {
   background: var(--surface); color: var(--text);
 }
 .drop.hidden { display: none; }
+
+.job .note { margin: 6px 0 0; font-size: 0.85em; opacity: 0.75; line-height: 1.4; }
