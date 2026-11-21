@@ -30,6 +30,8 @@ from friday.integrations.voice_service import VoiceServiceLauncher
 
 log = logging.getLogger(__name__)
 
+PART_VOLUME = 0.7  # an added part sits a little under the song
+
 # ACE-Step's instrument names, and the words people use for them.
 _TRACKS: dict[str, str] = {
     "backing_vocals": r"backing\s+vocals?|harmon(?:y|ies)|choir|backing\s+singers?",
@@ -269,9 +271,22 @@ class AceStepClient:
             first = parsed[0] if isinstance(parsed, list) and parsed else {}
             if status == 1 and isinstance(first, dict):
                 return first
-            reason = (first.get("error") if isinstance(first, dict) else None) or item.get("error")
-            raise SongAIError(f"ACE-Step couldn't do it: {reason or 'no reason given'}")
+            reason = (
+                (first.get("error") if isinstance(first, dict) else None)
+                or item.get("error")
+                or item.get("progress_text")
+            )
+            raise SongAIError(_plain_reason(str(reason or "")))
         raise SongAIError(f"ACE-Step took longer than {self.timeout_s / 60:.0f} minutes")
+
+
+def _plain_reason(reason: str) -> str:
+    if "out of memory" in reason.lower():
+        return (
+            "The graphics card ran out of memory for this song. Close other programs "
+            "that use it (games, ComfyUI) or try a shorter song."
+        )
+    return f"ACE-Step couldn't do it: {reason.strip() or 'no reason given'}"
 
 
 def _data(response: httpx.Response) -> Any:
@@ -294,8 +309,51 @@ def output_path(source: Path, task: SongTask, folder: Path) -> Path:
     return path
 
 
+def part_path(target: Path) -> Path:
+    """Where the new part alone is kept, next to the mixed song."""
+    return target.with_name(f"{target.stem} - part only.mp3")
+
+
+def mix_args(ffmpeg: str, song: Path, part: Path, target: Path) -> list[str]:
+    """The original song plus the new part, a little quieter, without clipping."""
+    graph = (
+        f"[1:a]volume={PART_VOLUME}[p];"
+        "[0:a][p]amix=inputs=2:duration=first:normalize=0,"
+        "alimiter=limit=0.95:level=disabled"
+    )
+    return [
+        ffmpeg, "-hide_banner", "-nostdin", "-y", "-i", str(song), "-i", str(part),
+        "-filter_complex", graph, "-c:a", "libmp3lame", "-q:a", "0", str(target),
+    ]  # fmt: skip
+
+
+async def mix(ffmpeg: str, song: Path, part: Path, target: Path) -> Path:
+    process = await asyncio.create_subprocess_exec(
+        *mix_args(ffmpeg, song, part, target),
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        _, err = await process.communicate()
+    except asyncio.CancelledError:
+        process.kill()
+        await process.wait()
+        target.unlink(missing_ok=True)  # noqa: ASYNC240 (instant)
+        raise
+    if process.returncode != 0:
+        target.unlink(missing_ok=True)  # noqa: ASYNC240 (instant)
+        last = (err or b"").decode(errors="replace").strip().splitlines()[-1:] or ["no details"]
+        raise SongAIError(f"ffmpeg could not mix the new part in: {last[0]}")
+    return target
+
+
 class SongEditor:
-    """Starts ACE-Step's server when needed, runs one change, stops it again."""
+    """Starts ACE-Step's server when needed, runs one change, stops it again.
+
+    ACE-Step plays an added part on its own (measured on the PC: the high notes
+    of the song were gone), so the part is mixed back into the original with
+    ffmpeg. The part alone is kept next to it.
+    """
 
     def __init__(
         self,
@@ -303,20 +361,28 @@ class SongEditor:
         launcher: VoiceServiceLauncher | None = None,
         *,
         stop_after: bool = True,
+        ffmpeg: str | None = None,
     ) -> None:
         self.client = client
         self.launcher = launcher
         self.stop_after = stop_after
+        self.ffmpeg = ffmpeg
 
     @property
     def model(self) -> str:
         return self.client.model
 
     async def run(self, source: Path, task: SongTask, target: Path) -> Path:
+        mixing = task.task == "lego" and self.ffmpeg is not None
+        made = part_path(target) if mixing else target
         if self.launcher is not None:
             await self.launcher.start()
         try:
-            return await self.client.run(source, task, target)
+            await self.client.run(source, task, made)
         finally:
             if self.launcher is not None and self.stop_after:
                 self.launcher.stop()
+        if mixing:
+            assert self.ffmpeg is not None
+            await mix(self.ffmpeg, source, made, target)
+        return target

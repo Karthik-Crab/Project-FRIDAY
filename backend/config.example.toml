@@ -178,7 +178,9 @@ document_chars = 14000           # how much of an attached document goes to the 
 enabled = false
 url = "http://127.0.0.1:8001"
 # command = ["/path/to/ACE-Step-1.5/.venv/bin/acestep-api"]
-# env = { ACESTEP_CONFIG_PATH = "acestep-v15-base", ACESTEP_INIT_LLM = "false", ACESTEP_OFFLOAD_TO_CPU = "true" }
+# ACE-Step looks for its models in ACESTEP_PROJECT_ROOT/checkpoints. The
+# memory setting lets the base model fit an 8 GB card (measured: 7.5 GB peak).
+# env = { ACESTEP_CONFIG_PATH = "acestep-v15-base", ACESTEP_INIT_LLM = "false", ACESTEP_OFFLOAD_TO_CPU = "true", ACESTEP_PROJECT_ROOT = "/path/to/ACE-Step-1.5", PYTORCH_ALLOC_CONF = "expandable_segments:True" }
 model = "acestep-v15-base"
 steps = 50                       # more: better and slower
 stop_after = true                # stop the server after each change (gives its memory back)

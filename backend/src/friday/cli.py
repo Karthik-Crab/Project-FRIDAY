@@ -594,7 +594,7 @@ async def _voice(config: FridayConfig, router: ProviderRouter, simulate: bool) -
     await session.run()
 
 
-def _song_ai(config: FridayConfig, here: Path) -> SongEditor | None:
+def _song_ai(config: FridayConfig, here: Path, ffmpeg: str | None) -> SongEditor | None:
     """ACE-Step for AI changes to attached songs, if it is set up."""
     from friday.integrations.song_ai import AceStepClient, SongEditor
     from friday.integrations.voice_service import VoiceServiceLauncher
@@ -615,7 +615,7 @@ def _song_ai(config: FridayConfig, here: Path) -> SongEditor | None:
         else None
     )
     client = AceStepClient(c.url, model=c.model, steps=c.steps, timeout_s=c.timeout_s)
-    return SongEditor(client, launcher, stop_after=c.stop_after)
+    return SongEditor(client, launcher, stop_after=c.stop_after, ffmpeg=ffmpeg)
 
 
 def _model_list(
@@ -750,7 +750,7 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
         can_see=router.has_route("vision"),
         document_chars=config.app.document_chars,
         can_think=any(p.think is not None for p in config.providers.values()),
-        song_ai=_song_ai(config, here),
+        song_ai=_song_ai(config, here, ffmpeg),
     )
     port = config.app.port
     server = uvicorn.Server(

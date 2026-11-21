@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +21,10 @@ from friday.integrations.song_ai import (
     SongAIError,
     SongEditor,
     SongTask,
+    mix_args,
     output_path,
     parse_song_task,
+    part_path,
 )
 from friday.llm.providers.fake import FakeProvider
 from friday.llm.router import ProviderRouter
@@ -244,3 +247,39 @@ def test_without_ace_step_it_says_so(tmp_path: Path) -> None:
         ws.send_json({"type": "chat", "text": "add drums", "files": [song["id"]]})
         said = _until(ws, "message", lambda e: e["message"]["role"] == "assistant")
         assert "isn't set up" in said["message"]["content"]
+
+
+def test_the_mix_command() -> None:
+    args = mix_args("ffmpeg", Path("song.mp3"), Path("part.mp3"), Path("out.mp3"))
+    graph = args[args.index("-filter_complex") + 1]
+    assert args[args.index("song.mp3") - 1] == "-i" and args[args.index("part.mp3") - 1] == "-i"
+    assert "amix=inputs=2:duration=first:normalize=0" in graph and "alimiter" in graph
+    assert part_path(Path("/m/My Song (with bass 1).mp3")).name == (
+        "My Song (with bass 1) - part only.mp3"
+    )
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+async def test_an_added_part_is_mixed_into_the_song(tmp_path: Path) -> None:
+    song = tmp_path / "song.wav"
+    song.write_bytes(_wav(tmp_path / "s.wav"))
+    client = FakeClient()
+
+    async def tone(source: Path, task: SongTask, target: Path) -> Path:
+        client.done.append((source.name, task))
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi",
+            "-i", "sine=f=80:d=1", str(target),
+        )  # fmt: skip
+        await proc.wait()
+        return target
+
+    client.run = tone  # type: ignore[method-assign]
+    editor = SongEditor(client, ffmpeg="ffmpeg")
+    target = tmp_path / "song (with bass 1).mp3"
+    await editor.run(song, SongTask("lego", "bass", "bass"), target)
+    assert target.stat().st_size > 0 and part_path(target).stat().st_size > 0
+    # Pulling a part out is not mixed back in.
+    alone = tmp_path / "song (only bass 1).mp3"
+    await editor.run(song, SongTask("extract", "bass", "bass"), alone)
+    assert not part_path(alone).exists()

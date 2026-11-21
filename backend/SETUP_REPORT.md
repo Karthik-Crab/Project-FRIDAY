@@ -169,6 +169,32 @@ system snapshot. Found on 2026-11-21:
 | Voice on | 23 s | Qwen split 57 % processor / 43 % card beside Chatterbox (slower replies while voice is on) |
 | Voice off | 2 s | Qwen 100 % on the card again |
 
+### AI changes to songs (ACE-Step 1.5), 2026-11-21
+
+Installed on the studio drive, not the system SSD:
+
+- `/mnt/studio/ACE-Step-1.5`: ACE-Step 1.5 from github.com/ace-step/ACE-Step-1.5, its own Python 3.11
+  environment in `.venv` (8.5 GB, made with `uv sync`; uv's cache is in `/mnt/studio/.uv-cache`).
+- `checkpoints/` (14 GB): `acestep-v15-base` (the model that can add, pull out and redo parts),
+  plus turbo, the 1.7B planner, the text encoder and the VAE that came with the main download.
+  Only base is used. XL wants 12 GB of graphics memory; this card has 8.
+- Settings: `[song_ai]` in `~/.config/friday/config.toml` (backup: `config.toml.bak-20261121-1742`).
+
+Measured on this PC with a 30-second song, each change starting ACE-Step fresh (about 10 s of that is loading):
+
+| Asked | Took | Peak graphics memory | Result |
+|---|---|---|---|
+| add a funky bass line | 19–28 s | 7.6 GB | the new part comes out **alone**, so FRIDAY mixes it into the original with ffmpeg (low end +3.5 dB, the rest unchanged) and keeps the part alone too |
+| add drums | 24 s | 7.5 GB | highs +4.6 dB (cymbals), song kept |
+| give me just the drums | 16 s | 7.5 GB | made, loud (ACE-Step raises the level); not judged by ear |
+| make it a jazz version | 19 s | 7.5 GB | a different-sounding 30 s song |
+| redo 0:10 to 0:20 with a guitar solo | 22 s | 7.7 GB | 0:10–0:20 clearly new; the rest within −34 dB of the original |
+
+Found while testing: a second change in the same ACE-Step run ran out of memory (it keeps 6.4 GB).
+FRIDAY stops ACE-Step after every change, and `PYTORCH_ALLOC_CONF=expandable_segments:True` is set.
+While it works, FRIDAY frees ComfyUI and moves the talking model off the card, then brings it back.
+Nobody has listened to the results yet.
+
 ### Not yet done
 
 - The owner trying the app.
