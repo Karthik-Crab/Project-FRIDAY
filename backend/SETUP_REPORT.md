@@ -917,3 +917,10 @@ run. `tts_server_url` is not in the config.
   advice; the owner has no other microphone (see Run 2, Equipment).
 - No source code edited, nothing pushed, no keys or tokens handled. This report
   contains no keys or tokens.
+
+## Taking the singing out of songs (Demucs)
+
+- Installed 2026-11-21 in `/mnt/studio/demucs/.venv` (28 MB). It has no copy of torch of its own: a `.pth` file points it at ACE-Step's (`/mnt/studio/ACE-Step-1.5/.venv`, torch 2.10). If ACE-Step is ever reinstalled, check that `/mnt/studio/demucs/.venv/bin/python -c "import demucs.separate"` still works.
+- Model `htdemucs` (about 80 MB) is kept in `/mnt/studio/demucs/models` (`TORCH_HOME`).
+- Runs on the processor: a 3-minute song takes about 64 s and 2 GB of memory.
+- Settings: `[vocals]` in `~/.config/friday/config.toml` (backup: `config.toml.bak-20261121-1935`).
