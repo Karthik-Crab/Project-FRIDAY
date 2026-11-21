@@ -924,3 +924,26 @@ run. `tts_server_url` is not in the config.
 - Model `htdemucs` (about 80 MB) is kept in `/mnt/studio/demucs/models` (`TORCH_HOME`).
 - Runs on the processor: a 3-minute song takes about 64 s and 2 GB of memory.
 - Settings: `[vocals]` in `~/.config/friday/config.toml` (backup: `config.toml.bak-20261121-1935`).
+
+## Changing pictures (Qwen-Image-Edit)
+
+Installed 2026-11-21 on /mnt/studio (about 18 GB; studio drive 19 GB free after):
+
+| File | Folder | Size | From |
+|---|---|---|---|
+| Qwen-Rapid-NSFW-v23_Q4_K.gguf | ComfyUI/models/unet | 13.3 GB | huggingface.co/Novice25/Qwen-Image-Edit-Rapid-AIO-GGUF (v23) |
+| Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_M.gguf | ComfyUI/models/text_encoders | 4.4 GB | huggingface.co/Phil2Sat/Qwen-Image-Edit-Rapid-AIO-GGUF |
+| Qwen2.5-VL-7B-Instruct-abliterated.mmproj-Q8_0.gguf | ComfyUI/models/text_encoders | 0.8 GB | same (must sit next to the text reader) |
+| qwen_image_vae.safetensors | ComfyUI/models/vae | 0.2 GB | huggingface.co/Comfy-Org/Qwen-Image_ComfyUI |
+
+- The model is Phr00t's "Qwen-Image-Edit Rapid AIO" v23 NSFW: a community build of
+  Qwen-Image-Edit-2511 (Apache 2.0) with the filters removed and a 4-step speed-up
+  built in. No login needed. The owner asked for an uncensored model.
+- ComfyUI add-on: city96/ComfyUI-GGUF in ComfyUI/custom_nodes, plus the `gguf`
+  Python package in ComfyUI's .venv (installed by the owner).
+- Settings: `edit_unet`, `edit_text_encoder`, `edit_vae` in [studio] of
+  ~/.config/friday/config.toml (backup: config.toml.bak-20261121-edit).
+- Measured on the PC: one edit at about 1 megapixel takes 40-65 s. The model is
+  13 GB, so ComfyUI keeps about 5 GB on the graphics card and the rest in RAM
+  (peak 7.1 GB of 8 GB on the card). Background changes, night and moon, and a
+  white beard all kept the face the same.

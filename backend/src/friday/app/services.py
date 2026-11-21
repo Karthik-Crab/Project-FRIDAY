@@ -373,6 +373,10 @@ class AppServices:
         if picture is not None and image_edit.wants_picture_edit(text):
             # "now make the sky red" after a picture: change the latest version.
             return await self._chat_with_files(cid, text, [picture], think)
+        if picture is not None and _PICTURE_WORD.search(text) and self.can_see:
+            # "what's in this picture?" about the latest one: the model that reads
+            # pictures looks at it (the talking model would only guess from the chat).
+            return await self._chat_with_files(cid, text, [picture], think)
         if (
             picture is None
             and _PICTURE_WORD.search(text)

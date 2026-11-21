@@ -804,3 +804,18 @@ def test_without_a_picture_it_asks_for_one(tmp_path: Path) -> None:
         ws.send_json({"type": "chat", "text": "edit this photo so the sky is pink"})
         said = _until(ws, "message", lambda e: e["message"]["role"] == "assistant")
         assert said["message"]["content"] == image_edit.ATTACH_REPLY
+
+
+def test_a_question_about_the_last_picture_goes_to_the_model_that_sees(tmp_path: Path) -> None:
+    services, talk, eyes = _app(tmp_path)
+    with _client(services) as client, client.websocket_connect("/ws", headers=HOST) as ws:
+        pic = _upload(client, "fox.png", b"\x89PNG fake")
+        ws.send_json({"type": "chat", "text": "", "files": [pic["id"]]})
+        cid = _until(ws, "stream_end")["message"]["conversation_id"]
+        ws.send_json(
+            {"type": "chat", "conversation_id": cid, "text": "is the fox in this picture happy?"}
+        )
+        end = _until(ws, "stream_end")
+        assert end["message"]["meta"]["provider"] == "vision"
+        assert eyes.requests[-1].messages[-1].images == ("iVBORyBmYWtl",)
+        assert talk.requests == []

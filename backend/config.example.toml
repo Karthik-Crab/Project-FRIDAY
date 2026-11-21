@@ -149,6 +149,13 @@ music_seconds = 30
 music_lyrics = "[instrumental]"
 music_bpm = 110
 music_key = "C major"
+# Changing an attached picture ("make the sky red"): Qwen-Image-Edit GGUF files
+# in ComfyUI's models/unet, models/text_encoders and models/vae folders. Needs
+# the ComfyUI-GGUF add-on (custom_nodes). Leave edit_unet empty to turn it off.
+# edit_unet = "Qwen-Rapid-NSFW-v23_Q4_K.gguf"
+# edit_text_encoder = "Qwen2.5-VL-7B-Instruct-abliterated.Q4_K_M.gguf"
+# edit_vae = "qwen_image_vae.safetensors"
+# edit_steps = 4
 
 # ---------------------------------------------------------------------------
 # The chat app: `friday app` opens it in the browser (this computer only).
