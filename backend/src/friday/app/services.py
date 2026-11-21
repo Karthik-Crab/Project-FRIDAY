@@ -40,11 +40,17 @@ Event = dict[str, Any]
 _SPOKEN = {"image": "picture", "music": "music", "audio_edit": "song"}
 _MAX_ENGINES = 20  # conversations kept in memory; older ones are rebuilt from the store
 _PICTURE_WORD = re.compile(r"\b(?:pictures?|images?|photos?|drawings?|paintings?)\b", re.I)
-_SONG_MEMORY = 12  # a song attached within this many messages is "the song"
+_SONG_WORD = re.compile(r"\b(?:songs?|music|track|audio|mp3|recording|tune)\b", re.I)
+_ATTACH_SONG_REPLY = (
+    "I don't have a song in this chat to change. Attach it with the 📎 button and say what "
+    'to do, for example "remove the noise" or "add some bass". You\'ll see a card while '
+    "I work on it, and the new file appears on that card when it's done."
+)
 # Talk about the song that needs a true answer, not the talking model's guess.
 _SONG_TALK = re.compile(
     r"\b(?:again|retry|redo|done|ready|finished|saved?|where|file|folder|location|"
-    r"difference|different|changed?|work(?:ed|ing)?|lying|not\s+removed|still)\b",
+    r"difference|different|changed?|work(?:ed|ing)?|lying|not\s+removed|still|found|"
+    r"generate|process(?:ed|ing)?|missing|downloads?|not\s+there)\b",
     re.I,
 )
 _UPLOAD_ID = re.compile(r"^[0-9a-f]{32}$")
@@ -240,10 +246,10 @@ class AppServices:
         )
 
     def _recent_song(self, cid: str) -> Upload | None:
-        """The latest version of the song in this chat (within the last few turns):
-        the newest changed copy, or else the song as attached. So "remove the
-        noise" after "more bass" keeps the bass."""
-        for message in reversed(self.store.messages(cid)[-_SONG_MEMORY:]):
+        """The latest version of the song in this chat: the newest changed copy,
+        or else the song as attached. So "remove the noise" after "more bass"
+        keeps the bass. The whole chat counts (the owner once asked 20 messages on)."""
+        for message in reversed(self.store.messages(cid)):
             if (
                 message.kind == "job"
                 and message.meta.get("kind") == "audio_edit"
@@ -310,6 +316,12 @@ class AppServices:
         if song is not None and _is_song_change(text, self.song_ai is not None):
             # "remove the noise", "add drums" after a song: the same song again.
             return await self._chat_with_files(cid, text, [song], think)
+        if song is None and _SONG_WORD.search(text) and _is_song_change(text, True):
+            # Never let the talking model pretend to change a song it doesn't have.
+            self._title_from(cid, text)
+            self._emit_message(self.store.add(cid, "user", "text", text))
+            self._say(cid, text, _ATTACH_SONG_REPLY)
+            return cid
         if song is not None and _SONG_TALK.search(text) and not _PICTURE_WORD.search(text):
             # "is it done?", "where is it saved?", "try again": answered from what
             # really happened, not by the talking model (which once made it up).

@@ -621,3 +621,35 @@ def test_the_talking_model_is_told_it_cannot_change_files(tmp_path: Path) -> Non
     note = services.engine(services.conversation_id(None)).build_request().system
     assert "You cannot open, change, clean, convert or save files yourself" in note
     assert "music and changed songs are saved in" in note
+
+
+def test_a_song_far_back_in_the_chat_is_still_the_song(tmp_path: Path) -> None:
+    services, talk, _ = _app(tmp_path, ffmpeg="ffmpeg")
+    with _client(services) as client, client.websocket_connect("/ws", headers=HOST) as ws:
+        song = _upload(client, "Old Song.wav", _wav(tmp_path / "s.wav"))
+        ws.send_json({"type": "chat", "text": "hold this", "files": [song["id"]]})
+        cid = _until(ws, "message", lambda e: e["message"]["role"] == "assistant")["message"][
+            "conversation_id"
+        ]
+        for i in range(15):  # 30 messages of talk in between
+            ws.send_json({"type": "chat", "conversation_id": cid, "text": f"tell me a fact {i}"})
+            _until(ws, "stream_end", lambda e: True)
+        ws.send_json(
+            {
+                "type": "chat",
+                "conversation_id": cid,
+                "text": "can you remove the noise in this song?",
+            }
+        )
+        job = _until(ws, "message", lambda e: e["message"]["role"] == "assistant")["message"]
+        assert job["kind"] == "job" and job["content"] == "Old Song.wav: less noise"
+    assert len(talk.requests) == 15
+
+
+def test_without_a_song_it_asks_for_one_instead_of_pretending(tmp_path: Path) -> None:
+    services, talk, _ = _app(tmp_path, ffmpeg="ffmpeg")
+    with _client(services) as client, client.websocket_connect("/ws", headers=HOST) as ws:
+        ws.send_json({"type": "chat", "text": "can you remove the noise in this song?"})
+        said = _until(ws, "message", lambda e: e["message"]["role"] == "assistant")["message"]
+        assert "Attach it with the 📎 button" in said["content"]
+    assert talk.requests == []
