@@ -22,7 +22,12 @@ from pathlib import Path
 
 from friday.conversation.notes import NoteBook
 from friday.core.errors import FridayError
-from friday.integrations.claude_code import CodeAgent, CodeResult, spoken_summary
+from friday.integrations.claude_code import (
+    CodeAgent,
+    CodeResult,
+    spoken_summary,
+    without_spoken_line,
+)
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +116,8 @@ class Notice:
     spoken: str
     ok: bool
     log_path: Path | None = None
+    # The agent's whole answer, for the screen (``spoken`` is the short version).
+    detail: str = ""
 
 
 class CodeDelegate:
@@ -234,7 +241,15 @@ class CodeDelegate:
             self.notes.log_work(task, summary, result.ok)
         if self.on_done is not None:
             try:
-                self.on_done(Notice(task=task, spoken=spoken.strip(), ok=result.ok, log_path=path))
+                self.on_done(
+                    Notice(
+                        task=task,
+                        spoken=spoken.strip(),
+                        ok=result.ok,
+                        log_path=path,
+                        detail=without_spoken_line(result.text),
+                    )
+                )
             except Exception:  # a broken listener must not lose the result
                 log.exception("code agent listener failed")
 

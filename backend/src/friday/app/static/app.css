@@ -305,3 +305,14 @@ textarea#input {
 .drop.hidden { display: none; }
 
 .job .note { margin: 6px 0 0; font-size: 0.85em; opacity: 0.75; line-height: 1.4; }
+
+/* Web pages an answer was based on */
+.sources { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.sources a {
+  color: var(--muted); text-decoration: none; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface); max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sources a:hover { color: var(--text); border-color: var(--accent); }
+/* An answer from Claude Code */
+.msg.from-agent .body { border-left: 3px solid var(--accent); padding-left: 12px; }

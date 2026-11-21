@@ -34,6 +34,7 @@ from friday.core.errors import ConfigError, FridayError
 from friday.core.logging import configure_logging
 from friday.core.messages import ChatRequest
 from friday.core.secrets import KeyringEnvSecretStore
+from friday.integrations.web import WebSearch
 from friday.llm.factory import build_router
 from friday.llm.router import ProviderRouter
 
@@ -76,6 +77,20 @@ def _delegate(config: FridayConfig, notes: NoteBook | None) -> CodeDelegate | No
         keep_session=cc.keep_session,
         scope=str(project.resolve()),
         notes=notes,
+    )
+
+
+def _web(config: FridayConfig, router: ProviderRouter) -> WebSearch | None:
+    w = config.web
+    if not w.enabled or router.offline:
+        return None
+    return WebSearch(
+        w.searxng_url,
+        start_command=w.start_command,
+        max_results=w.max_results,
+        read_pages=w.read_pages,
+        page_chars=w.page_chars,
+        auto=w.auto,
     )
 
 
@@ -179,6 +194,7 @@ def _engine(config: FridayConfig, router: ProviderRouter, channel: Channel) -> C
         delegate=_delegate(config, notes),
         notes=notes,
         studio=_studio(config, router),
+        web=_web(config, router),
     )
 
 
@@ -727,6 +743,7 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
     here = default_config_path().parent
     studio = _studio(config, router)
     notes = _notes(config)
+    web = _web(config, router)
     services: AppServices | None = None
 
     def make_engine(conversation_id: str) -> ConversationEngine:
@@ -738,8 +755,15 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
 
                 assert isinstance(notice, Notice)
                 if services is not None:
+                    head = (
+                        "Claude Code is done." if notice.ok else "Claude Code ran into a problem."
+                    )
+                    text = f"{head}\n\n{notice.detail}" if notice.detail else notice.spoken
                     services.notice(
-                        conversation_id, notice.spoken, f"(asked Claude Code: {notice.task})"
+                        conversation_id,
+                        text,
+                        f"(asked Claude Code: {notice.task})",
+                        meta={"from": "Claude Code"},
                     )
 
             delegate.on_done = finished
@@ -751,6 +775,7 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
             delegate=delegate,
             notes=notes,
             studio=studio,
+            web=web,
         )
 
     v = config.voice

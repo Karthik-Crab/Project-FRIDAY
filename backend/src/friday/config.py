@@ -217,6 +217,22 @@ def _default_routes() -> dict[str, list[str]]:
     return {"default": ["local"], "offline": ["local"]}
 
 
+class WebSettings(_Strict):
+    """Looking things up on the internet with SearXNG, a search program on this
+    computer (it asks Google, DuckDuckGo and others; no account or key)."""
+
+    enabled: bool = False
+    searxng_url: str = "http://127.0.0.1:8888"
+    # How to start SearXNG when it isn't running, e.g. ["podman", "start", "friday-searxng"].
+    start_command: list[str] = Field(default_factory=list)
+    # true: search by itself when a question needs it; false: only when asked
+    # ("look up ...", "search the web for ...") or when a link is pasted.
+    auto: bool = True
+    max_results: int = Field(default=5, ge=1, le=10)
+    read_pages: int = Field(default=2, ge=0, le=5)  # top results read in full
+    page_chars: int = Field(default=3500, ge=500, le=20_000)
+
+
 class AppSettings(_Strict):
     """The chat app in the browser (``friday app``)."""
 
@@ -279,6 +295,7 @@ class FridayConfig(_Strict):
     app: AppSettings = Field(default_factory=AppSettings)
     song_ai: SongAISettings = Field(default_factory=SongAISettings)
     vocals: VocalSettings = Field(default_factory=VocalSettings)
+    web: WebSettings = Field(default_factory=WebSettings)
 
     @model_validator(mode="after")
     def _check_routes(self) -> FridayConfig:

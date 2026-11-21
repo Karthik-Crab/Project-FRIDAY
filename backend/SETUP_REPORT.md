@@ -976,3 +976,40 @@ Installed 2026-11-21 on /mnt/studio (about 18 GB; studio drive 19 GB free after)
   of the RAM too (`free_memory`), and ComfyUI drops to about 6 GB. Picture
   making still keeps its model in RAM for a quick next start.
 
+## Internet search (SearXNG)
+
+- **The search program** is SearXNG, running in a podman container named
+  `friday-searxng` from `docker.io/searxng/searxng:latest` (284 MB, in your home
+  folder's container storage). It listens on `127.0.0.1:8888` only. Its settings
+  are in `~/.config/friday/searxng/settings.yml`:
+  - the json format is on;
+  - the limiter is off;
+  - safe search is off;
+  - it has its own random `secret_key`, which stays local and is not a login.
+- **Starting it.** FRIDAY starts it when needed (`[web] start_command`). By hand:
+  `podman start friday-searxng`. To stop it: `podman stop friday-searxng`.
+- **When FRIDAY searches:**
+  - "look up…", "search the web for…", "google…" and pasted links always;
+  - other questions after a one-line "search or not?" check by the talking model;
+  - never for small talk.
+  - `[web] auto = false` limits it to the asked-for cases.
+- **What the search engines see:** the search words, never your chats or files.
+  Incognito chats may search too, because you chose that.
+- **Limit:** the small local model can still misread pages. Check the source
+  links under the answer, or ask Claude Code for anything important.
+
+## Claude Code from FRIDAY
+
+- **Switched on** in `[claude_code]`:
+  - `project_dir = "~/FRIDAY-workspace"`;
+  - `permission_mode = "acceptEdits"`, so it can create and change files in
+    that folder only;
+  - `~/FRIDAY-workspace/.claude/settings.json` lets it search the web and read
+    pages. It can't run commands.
+- **How to use it:** say or type "ask Claude Code to …". FRIDAY reads it back,
+  and only "yes" sends it. The whole answer appears in the chat, and the
+  workspace holds any files it made.
+- **Cost:** each task uses your Claude subscription. Not available in incognito
+  chats.
+- **Settings backup:** `config.toml.bak-20261121-web`.
+

@@ -7,10 +7,12 @@ the desktop UI) are just different front-ends on top of ``respond``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 
 from friday.conversation.delegation import CodeDelegate, is_agent_command, not_set_up_reply
 from friday.conversation.memory import INTERRUPTED_MARKER, ConversationWindow
@@ -19,6 +21,17 @@ from friday.conversation.studio import StudioDelegate, is_studio_command, parse_
 from friday.conversation.studio import not_set_up_reply as studio_not_set_up
 from friday.core.errors import ProviderError
 from friday.core.messages import ChatRequest, Message, Role
+from friday.integrations.web import (
+    PLANNER_PROMPT,
+    Findings,
+    WebError,
+    WebSearch,
+    asked_query,
+    is_fresh,
+    maybe_needs_web,
+    planner_query,
+    urls_in,
+)
 from friday.llm.base import ProviderInfo
 from friday.llm.router import ProviderRouter, StreamResult
 from friday.persona.commands import parse_command
@@ -60,6 +73,8 @@ class TurnInfo:
     user_stored: bool = False  # the user message for this turn is in history
     full_text: str = ""
     extra: dict[str, str] = field(default_factory=dict)
+    # Web pages the answer was based on: {"title", "url", "site"}.
+    sources: list[dict[str, str]] = field(default_factory=list)
 
 
 class ConversationEngine:
@@ -75,9 +90,16 @@ class ConversationEngine:
         delegate: CodeDelegate | None = None,
         notes: NoteBook | None = None,
         studio: StudioDelegate | None = None,
+        web: WebSearch | None = None,
     ) -> None:
         self.router = router
         self.persona = persona or Persona()
+        # Looking things up on the internet before answering (None: offline).
+        self.web = web
+        if web is not None and not self.persona.can_search:
+            self.persona = replace(self.persona, can_search=True)
+        # Told what FRIDAY is doing before the answer starts ("Searching the web: ...").
+        self.on_activity: Callable[[str], None] | None = None
         self.window = window or ConversationWindow()
         self.channel = channel
         self.mode = mode
@@ -138,9 +160,10 @@ class ConversationEngine:
         turn.user_stored = turn.stored = True
         turn.full_text = text
 
-    def build_request(self) -> ChatRequest:
+    def build_request(self, web_note: str | None = None) -> ChatRequest:
+        extra = "\n\n".join(p for p in (self._extra_context(), web_note) if p) or None
         return ChatRequest(
-            system=self.persona.system_prompt(self.mode, self.channel, self._extra_context()),
+            system=self.persona.system_prompt(self.mode, self.channel, extra),
             messages=self.window.messages,
             max_tokens=self._max_tokens[self.channel],
             temperature=0.8 if self.mode is Mode.COMPANION else 0.4,
@@ -222,7 +245,10 @@ class ConversationEngine:
 
         self.window.add_user(user_text)
         turn.user_stored = True
-        request = self.build_request()
+        web_note = None
+        if self.web is not None and not images:
+            web_note = await self._look_up(user_text, turn)
+        request = self.build_request(web_note)
         purpose = MODE_PURPOSE[self.mode]
         if images:
             purpose = "vision"
@@ -260,6 +286,77 @@ class ConversationEngine:
                 turn.full_text = text
                 self.window.add_assistant(text if completed else text + INTERRUPTED_MARKER)
                 turn.stored = True
+
+    def _activity(self, text: str) -> None:
+        if self.on_activity is not None:
+            try:
+                self.on_activity(text)
+            except Exception:
+                log.exception("activity listener failed")
+
+    async def _look_up(self, text: str, turn: TurnInfo) -> str | None:
+        """Search the internet first when the message needs it; the note for the model."""
+        web = self.web
+        assert web is not None
+        user = self.persona.user_name
+        query: str | None = None
+        try:
+            urls = urls_in(text)
+            if urls:
+                self._activity("Reading " + ", ".join(urls))
+                found: Findings = await web.open_pages(urls)
+            else:
+                query = asked_query(text)
+                if query is None and web.auto and (is_fresh(text) or maybe_needs_web(text)):
+                    query = await self._plan_search()
+                if query is None:
+                    return None
+                self._activity(f"Searching the web: {query}")
+                found = await web.lookup(query)
+        except WebError as exc:
+            log.warning("web search failed: %s", exc)
+            return (
+                f"A web search was needed for this but it failed ({exc}). Tell {user} the "
+                "search didn't work this time, and don't guess about live or recent things."
+            )
+        if not found.results:
+            return (
+                f'A web search for "{query}" found nothing. Tell {user} so, rather than guessing.'
+            )
+        turn.sources = found.sources()
+        return found.context()
+
+    async def _plan_search(self) -> str | None:
+        """Ask the talking model, in one line, whether to search and for what."""
+        recent = self.window.messages[-7:]
+        convo = "\n".join(f"{m.role.value}: {m.content[:500]}" for m in recent)
+        today = datetime.now().strftime("%A %d %B %Y")
+        request = ChatRequest(
+            system=PLANNER_PROMPT.format(today=today),
+            messages=(
+                Message(
+                    Role.USER,
+                    f"Conversation:\n{convo}\n\nDoes the last message need a web search?",
+                ),
+            ),
+            max_tokens=60,
+            temperature=0.0,
+            think=False,
+        )
+        parts: list[str] = []
+
+        async def ask() -> None:
+            stream = self.router.stream(MODE_PURPOSE[self.mode], request, StreamResult())
+            async with aclosing(stream):
+                async for delta in stream:
+                    parts.append(delta)
+
+        try:
+            await asyncio.wait_for(ask(), 20)
+        except (ProviderError, TimeoutError) as exc:
+            log.warning("could not decide about a web search: %s", exc)
+            return None
+        return planner_query("".join(parts))
 
     def _control(self, user_text: str, turn: TurnInfo) -> str | None:
         """A fixed reply when the words are a command or a task, not conversation."""

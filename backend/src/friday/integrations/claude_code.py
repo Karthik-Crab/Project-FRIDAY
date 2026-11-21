@@ -23,8 +23,9 @@ from friday.core.errors import FridayError
 
 # Told to Claude Code with every task, so the result can be read aloud.
 RELAY_NOTE = (
-    "\n\n(This request was dictated by voice and passed on by a voice assistant, so "
-    "names may be misspelt; use your judgement. When you have finished, end your reply "
+    "\n\n(This request was passed on by a voice assistant; it may have been dictated, so "
+    "names may be misspelt; use your judgement. The full reply is shown on screen. "
+    "When you have finished, end your reply "
     "with one final line that starts with 'SPOKEN:' followed by one or two short plain "
     "sentences, without markdown, that say what the outcome is. That line is read aloud.)"
 )
@@ -47,6 +48,11 @@ class CodeResult:
 
 class CodeAgent(Protocol):
     async def run(self, task: str, resume: str | None = None) -> CodeResult: ...
+
+
+def without_spoken_line(text: str) -> str:
+    """The whole answer for reading on screen, minus the line meant for the voice."""
+    return _SPOKEN.sub("", text).strip()
 
 
 def spoken_summary(text: str, limit: int = 300) -> str:

@@ -491,6 +491,9 @@ class AppServices:
             engine.think = think if self.can_think else None
             draft = f"d{uuid.uuid4().hex[:12]}"
             self.emit({"type": "stream_start", "conversation_id": cid, "draft": draft})
+            engine.on_activity = lambda text: self.emit(
+                {"type": "activity", "draft": draft, "text": text}
+            )
 
             async def write() -> None:
                 async with contextlib.aclosing(engine.respond(text, images)) as deltas:
@@ -509,6 +512,7 @@ class AppServices:
                 stopped = True
             finally:
                 self._replies.pop(cid, None)
+                engine.on_activity = None
             turn = engine.last_turn
             if stopped and not turn.full_text:
                 turn.full_text = "(stopped)"
@@ -520,6 +524,8 @@ class AppServices:
                 meta["model"] = turn.provider.model
             if turn.failed:
                 meta["failed"] = True
+            if turn.sources:
+                meta["sources"] = turn.sources
             reply = self.store.add(cid, "assistant", "text", turn.full_text, meta=meta)
             self.emit({"type": "stream_end", "draft": draft, "message": reply.to_json()})
 
@@ -603,12 +609,18 @@ class AppServices:
         await self._stream_reply(cid, said, images, think)
         return cid
 
-    def notice(self, conversation_id: str, text: str, context: str) -> None:
+    def notice(
+        self,
+        conversation_id: str,
+        text: str,
+        context: str,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
         """FRIDAY says something herself (Claude Code finished a task)."""
         if self.store.get(conversation_id) is None:
             return
-        self._emit_message(self.store.add(conversation_id, "assistant", "text", text))
-        self._remember(conversation_id, context, text)
+        self._emit_message(self.store.add(conversation_id, "assistant", "text", text, meta=meta))
+        self._remember(conversation_id, context, text[:8000])
 
     def _remember(self, conversation_id: str, said: str, answer: str) -> None:
         engine = self._engines.get(conversation_id)

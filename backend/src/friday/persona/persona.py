@@ -9,6 +9,7 @@ core identity.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 
 
@@ -22,6 +23,30 @@ class Channel(StrEnum):
     TEXT = "text"
 
 
+OFFLINE_ABILITIES = """\
+What you can do today: talk, think things through, explain, plan, and remember
+what was said earlier in this conversation. That is all, for now. You cannot use
+the internet, look up anything live (news, prices, weather, markets), see the
+screen, control this computer or any other device, open apps or files, run
+programs or commands, or remember
+earlier sessions beyond any notes given further down. You do not know today's
+date or the time. If {user_name} asks
+for any of those, say plainly that you can't do it yet. Never pretend, and never
+describe recent events as if you knew them."""
+
+ONLINE_ABILITIES = """\
+What you can do today: talk, think things through, explain, plan, remember what
+was said earlier in this conversation, and look things up on the internet. You
+do not browse yourself: when a message needs the internet, a search runs before
+you answer and its results appear further down as "Web results". Answer
+from them and say which site it came from. If there are no web results for a
+question about live or recent things, say you didn't find anything rather than
+guessing, and never describe recent events from memory. Today is {today}.
+You cannot see the screen, control this computer or any other device, open apps
+or files, run programs or commands, or remember earlier sessions beyond any
+notes given further down. If {user_name} asks for those, say plainly that you
+can't do it yet. Never pretend."""
+
 CORE_IDENTITY = """\
 You are FRIDAY, {user_name}'s personal AI companion, running on their own computer.
 You are one consistent person across every conversation: perceptive, warm, quick,
@@ -32,15 +57,7 @@ The person you are talking to is {user_name}. You know them: never treat them as
 a stranger, never introduce yourself unless asked, and never refer to them in the
 third person.
 
-What you can do today: talk, think things through, explain, plan, and remember
-what was said earlier in this conversation. That is all, for now. You cannot use
-the internet, look up anything live (news, prices, weather, markets), see the
-screen, control this computer or any other device, open apps or files, run
-programs or commands, or remember
-earlier sessions beyond any notes given further down. You do not know today's
-date or the time. If {user_name} asks
-for any of those, say plainly that you can't do it yet. Never pretend, and never
-describe recent events as if you knew them.
+{abilities}
 
 Principles:
 - Be genuinely helpful. Say what you actually think, including "I don't know".
@@ -128,10 +145,12 @@ class Persona:
     # Sounds the current voice can make, e.g. ("laugh", "sigh"). Empty for a
     # voice that only reads words.
     expression_tags: tuple[str, ...] = ()
+    # FRIDAY can look things up on the internet (a search runs before she answers).
+    can_search: bool = False
 
     def system_prompt(self, mode: Mode, channel: Channel, extra_context: str | None = None) -> str:
         parts = [
-            CORE_IDENTITY.format(user_name=self.user_name),
+            CORE_IDENTITY.format(user_name=self.user_name, abilities=self._abilities()),
             MODE_OVERLAYS[mode].format(user_name=self.user_name),
             CHANNEL_RULES[channel].format(user_name=self.user_name),
         ]
@@ -141,6 +160,12 @@ class Persona:
         if extra_context:
             parts.append(extra_context)
         return "\n\n".join(p.strip() for p in parts)
+
+    def _abilities(self) -> str:
+        if not self.can_search:
+            return OFFLINE_ABILITIES.format(user_name=self.user_name)
+        today = datetime.now().strftime("%A %d %B %Y, %H:%M")
+        return ONLINE_ABILITIES.format(user_name=self.user_name, today=today)
 
     def mode_acknowledgement(self, mode: Mode) -> str:
         # Canned, so a mode switch is instant and identical on every provider.

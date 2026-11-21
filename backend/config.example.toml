@@ -198,3 +198,16 @@ stop_after = true                # stop the server after each change (gives its 
 # command = ["/path/to/demucs/.venv/bin/python", "-m", "demucs.separate"]
 # model = "htdemucs"
 # device = "cpu"    # "cuda" is faster but needs the graphics card
+
+# ---- web: look things up on the internet ---------------------------------
+# FRIDAY searches with SearXNG, a search program on this computer that asks
+# Google, DuckDuckGo and others (no account or key). One way to set it up:
+#   podman create --name friday-searxng -p 127.0.0.1:8888:8080 \
+#     -v ~/.config/friday/searxng:/etc/searxng:Z docker.io/searxng/searxng:latest
+# with a settings.yml there that turns on the json format (see SETUP_REPORT.md).
+# [web]
+# enabled = true
+# searxng_url = "http://127.0.0.1:8888"
+# start_command = ["podman", "start", "friday-searxng"]
+# auto = true          # search by itself when a question needs it; false = only when asked
+# read_pages = 2       # how many top results are read in full

@@ -189,6 +189,12 @@ function onEvent(ev) {
       if (state.answering) setAnswering(ev.conversation_id);
       if (ev.conversation_id === state.current) startDraft(ev.draft);
       break;
+    case "activity": {  // e.g. "Searching the web: ..." before the answer starts
+      const d = state.drafts.get(ev.draft);
+      const label = d && !d.text && d.body.querySelector(".wait-label");
+      if (label) { label.textContent = ev.text.length > 90 ? ev.text.slice(0, 88) + "…" : ev.text; scrollDown(); }
+      break;
+    }
     case "delta": {
       const d = state.drafts.get(ev.draft);
       if (d) {
@@ -354,8 +360,13 @@ function renderMessage(m) {
   if (m.kind === "proposal") return renderProposal(el, m);
   if (m.kind === "job") return renderJob(el, m);
   if (m.meta.failed) el.classList.add("failed");
-  const who = [m.meta.stopped ? "⏹ stopped" : "", m.meta.voice ? "🎙 spoken" : "", m.meta.model || m.meta.provider || ""].filter(Boolean);
-  el.innerHTML = `<div class="body">${markdown(m.content)}</div>${who.length ? `<div class="tag">${who.map(esc).map((w) => `<span>${w}</span>`).join("")}</div>` : ""}`;
+  const who = [m.meta.stopped ? "⏹ stopped" : "", m.meta.voice ? "🎙 spoken" : "", m.meta.from || m.meta.model || m.meta.provider || ""].filter(Boolean);
+  if (m.meta.from) el.classList.add("from-agent");
+  const sources = (m.meta.sources || []).filter((s) => /^https?:\/\//i.test(s.url));
+  const links = sources.length
+    ? `<div class="sources">🌐 ${sources.map((s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" title="${esc(s.title)}">${esc(s.site || s.url)}</a>`).join("")}</div>`
+    : "";
+  el.innerHTML = `<div class="body">${markdown(m.content)}</div>${links}${who.length ? `<div class="tag">${who.map(esc).map((w) => `<span>${w}</span>`).join("")}</div>` : ""}`;
   return el;
 }
 
