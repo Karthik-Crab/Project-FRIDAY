@@ -1016,17 +1016,18 @@ Installed 2026-11-21 on /mnt/studio (about 18 GB; studio drive 19 GB free after)
 
 ## Phones and laptops at home (passcode)
 
-FRIDAY can be opened from other devices on the home network: chats, pictures and
-music. Voice stays at the PC, because it uses the PC's own microphone and speakers.
+FRIDAY can be opened from other devices on the home network: chats, pictures, music
+and voice. Voice mode listens and speaks on the device you switched it on from
+(see "Voice on the device in your hand" below).
 
 **One step to turn it on.** In a terminal on the PC, run this, choose a passcode and
 type it twice:
 
     cd ~/local-ai/Project-FRIDAY/backend && .venv/bin/friday passcode
 
-Then restart FRIDAY. The terminal shows the addresses to type on the phone or laptop:
-`http://nobara-pc.local:8765/` (keeps working when the router changes the PC's
-number) or `http://192.168.0.110:8765/` today. The switch is `lan = true` under
+Then restart FRIDAY. Each new device needs FRIDAY's home certificate once (next
+section); after that it opens `https://nobara-pc.local:8443/` (keeps working when
+the router changes the PC's number) or `https://192.168.0.110:8443/` today. The switch is `lan = true` under
 `[app]` in `~/.config/friday/config.toml` (backup: `config.toml.bak-20261121-lan`).
 Without a passcode, FRIDAY stays on this PC only.
 
@@ -1051,10 +1052,8 @@ Without a passcode, FRIDAY stays on this PC only.
   1024. The router opens nothing to the internet.
 
 **Limits**
-- It is plain http inside your home, the same as a router's settings page. Someone on
-  your Wi-Fi with special tools could read the traffic. Keep the Wi-Fi password
-  strong and don't give it to guests (use the router's guest network for them).
-  Encrypted https is the next step when we open it beyond the home.
+- Keep the Wi-Fi password strong and don't give it to guests (use the router's guest
+  network for them).
 - A signed-in phone can do everything the PC can, including sending Claude Code
   tasks. Each task still needs your "yes".
 
@@ -1063,3 +1062,61 @@ home network: blocked before sign-in, wrong passcode refused, another website's 
 attempt refused, DNS rebinding refused, right passcode let in. Firefox then signed in
 and chatted over the live connection. The throwaway passcode and test server were
 deleted. Your own passcode has not been set.
+
+## Voice on the device in your hand (2026-11-22)
+
+Voice mode now uses the microphone and speaker of the device you switched it on
+from: the phone, a laptop, or the PC's own browser. Before, FRIDAY always listened
+and answered through the PC, even when you tapped Voice on the phone.
+
+**Echo cancellation.** The browser now cleans up the microphone the same way video
+calls do: echo cancellation, noise suppression and level control. So FRIDAY should
+no longer hear her own voice from the speaker and interrupt herself. This also works
+in the PC's browser, so a headset is no longer needed there. Still to confirm by the
+owner on real devices: the phone, the PC with speakers, and a laptop.
+
+Only one device has voice at a time. Switching it on somewhere else moves it there,
+and closing that page switches voice off. The old way (the PC's own microphone and
+speakers, no echo cancellation) is still there: `audio = "device"` under `[voice]`.
+
+**Secure connection (https).** Phones only allow the microphone on secure pages, so
+home devices now use https on port 8443. Everything between the phone and the PC is
+encrypted. FRIDAY made its own small certificate authority, "FRIDAY home", for this.
+- It can only vouch for `.local` names and home addresses (192.168.x.x, 10.x.x.x,
+  172.16-31.x.x). Even if someone stole it, it could not pretend to be a bank or any
+  other website. This was tested: a fake google.com certificate made with it is
+  rejected.
+- Its files are in `~/.config/friday/tls/`. Only your user can read that folder, and
+  the keys are readable only by you.
+- FRIDAY renews the PC's certificate by itself, for example when the router gives
+  the PC a new address. Phones need nothing new.
+
+**Setting up a phone (once per device, about two minutes)**
+1. Restart FRIDAY with the desktop icon. The terminal shows a "Home certificate code".
+2. On the phone, open `http://nobara-pc.local:8765/`. A setup page opens.
+3. Tap **Download certificate**.
+4. Settings → search **CA certificate** → Install anyway → pick `FRIDAY-home.crt`.
+   (Or Settings → Security & privacy → More security settings → Encryption &
+   credentials → Install a certificate → CA certificate.)
+5. Tap **Open FRIDAY** on the setup page and enter your passcode again (the secure
+   address is a new site for the phone). Add it to the home screen.
+
+Android then shows a note like "network may be monitored". That is about this
+certificate, and it is expected. To check the certificate is FRIDAY's: Settings →
+Encryption & credentials → Trusted credentials → User → FRIDAY home. The start of its
+SHA-256 fingerprint must match the code in the PC's terminal.
+
+Laptops: the setup page has steps for Windows, Mac and Firefox.
+
+**Tested (2026-11-22):** a real Firefox, both through `https://nobara-pc.local:8443/`
+and on the PC at `http://127.0.0.1:8765/`. A recorded question went in through the
+browser's (echo-cancelled) microphone path; FRIDAY answered "2 plus 2 is 4", and her
+spoken answer played in that browser, not on the PC's speakers. Switching off released
+the microphone. Not tested yet: a real phone, and how well echo cancellation works
+with real speakers.
+
+**Good to know**
+- The voice can take a while to start if the graphics card is full. Once the voice
+  service ran out of graphics memory on the first try and worked on the next.
+- The old `http://…:8765/` address on home devices now only shows the setup page and
+  sends everything else to the secure address.

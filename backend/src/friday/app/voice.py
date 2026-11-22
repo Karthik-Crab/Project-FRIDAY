@@ -71,7 +71,10 @@ class VoiceMode:
         engine: ConversationEngine,
         conversation_id: str,
         on_event: Callable[[object], None],
+        audio: Any = None,
     ) -> None:
+        """``audio``: a browser page's microphone and speaker (``BrowserAudio``);
+        None uses this PC's own."""
         async with self._switch:
             if self.state == "on":
                 return
@@ -83,7 +86,10 @@ class VoiceMode:
                         await self.launcher.start()
                     finally:
                         await self._load_card_models()
-                session = await self._build(engine, on_event)
+                if audio is not None:
+                    session = await self._build(engine, on_event, audio)  # type: ignore[call-arg]
+                else:
+                    session = await self._build(engine, on_event)
             except BaseException:
                 self.state = "off"
                 if self.launcher is not None:
@@ -175,7 +181,9 @@ def real_session_builder(config: Any, router: ProviderRouter) -> SessionBuilder:
     v = config.voice
     loaded: dict[str, Any] = {}
 
-    async def build(engine: ConversationEngine, on_event: Callable[[object], None]) -> Session:
+    async def build(
+        engine: ConversationEngine, on_event: Callable[[object], None], audio: Any = None
+    ) -> Session:
         from friday.voice.adapters.faster_whisper_stt import FasterWhisperSTT
         from friday.voice.adapters.kokoro_tts import KokoroTTS
         from friday.voice.adapters.remote_tts import FallbackTTS, RemoteTTS
@@ -207,7 +215,11 @@ def real_session_builder(config: Any, router: ProviderRouter) -> SessionBuilder:
             engine.persona = replace(engine.persona, expression_tags=tts.expression_tags)
         vcfg = VoiceConfig(
             speech_threshold=v.speech_threshold,
-            speech_threshold_while_speaking=v.speech_threshold_while_speaking,
+            # The browser removes FRIDAY's own voice from the microphone, so she
+            # needs no extra deafness while she speaks.
+            speech_threshold_while_speaking=(
+                v.speech_threshold if audio is not None else v.speech_threshold_while_speaking
+            ),
             barge_in_min_ms=v.barge_in_min_ms,
             max_merges=v.max_merges,
             acknowledgements=tuple(v.acknowledgements),
@@ -217,11 +229,11 @@ def real_session_builder(config: Any, router: ProviderRouter) -> SessionBuilder:
         )
         return VoiceSession(
             engine,
-            MicrophoneSource(v.input_device),
+            audio if audio is not None else MicrophoneSource(v.input_device),
             EnergyVAD(min_speech_db=v.min_speech_db),
             loaded["stt"],
             tts,
-            SpeakerSink(v.output_device),
+            audio if audio is not None else SpeakerSink(v.output_device),
             vcfg,
             on_event=on_event,
         )

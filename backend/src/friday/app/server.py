@@ -149,6 +149,7 @@ def create_app(
             max_age=home.SESSION_DAYS * 86400,
             httponly=True,
             samesite="strict",
+            secure=request.url.scheme == "https",
             path="/",
         )
         return response
@@ -258,19 +259,75 @@ def create_app(
         try:
             await ws.send_json(services.status())
             while True:
-                data = await ws.receive_json()
+                message = await ws.receive()
+                if message["type"] == "websocket.disconnect":
+                    break
+                if message.get("bytes") is not None:  # microphone audio from this page
+                    audio = services.voice_audio
+                    if audio is not None and audio.owner is ws:
+                        audio.feed(message["bytes"])
+                    continue
+                try:
+                    data = json.loads(message.get("text") or "null")
+                except ValueError:
+                    continue
                 task = asyncio.create_task(_handle(services, ws, data))
                 tasks.add(task)
                 task.add_done_callback(tasks.discard)
         except WebSocketDisconnect:
             pass
         finally:
+            services.voice_page_gone(ws)
             services.unsubscribe(queue)
             sender.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await sender
             for task in tasks:
                 task.cancel()
+
+    return app
+
+
+def create_setup_app(https_port: int, ca_file: Path) -> FastAPI:
+    """The old plain-http address for home devices: a setup page with the home
+    certificate to install, and a forward to the secure address for the rest.
+    It serves nothing private."""
+    from friday.app import tls
+
+    app = FastAPI(title="FRIDAY setup", docs_url=None, redoc_url=None, openapi_url=None)
+
+    def secure_url(request: Request, path: str = "/") -> str:
+        host = (request.headers.get("host") or "").rsplit(":", 1)[0]
+        return f"https://{host}:{https_port}{path}"
+
+    @app.middleware("http")
+    async def home_only(request: Request, call_next: RequestResponseEndpoint) -> Response:
+        ip = request.client.host if request.client else None
+        if not home.home_host(request.headers.get("host")) or not (
+            home.is_home_network(ip) or home.is_this_computer(ip)
+        ):
+            return JSONResponse({"error": "not allowed"}, status_code=403)
+        response = await call_next(request)
+        for name, value in _SAFETY_HEADERS.items():
+            response.headers.setdefault(name, value)
+        return response
+
+    @app.get("/")
+    async def setup(request: Request) -> HTMLResponse:
+        page = home.SETUP_PAGE.replace("{secure}", secure_url(request))
+        return HTMLResponse(page, headers={"Cache-Control": "no-store"})
+
+    @app.get("/FRIDAY-home.crt")
+    async def certificate() -> Response:
+        return Response(
+            tls.ca_der(ca_file),
+            media_type="application/x-x509-ca-cert",
+            headers={"Content-Disposition": 'attachment; filename="FRIDAY-home.crt"'},
+        )
+
+    @app.api_route("/{rest:path}", methods=["GET", "HEAD", "POST"])
+    async def forward(request: Request, rest: str) -> Response:
+        return RedirectResponse(secure_url(request, "/" + rest), status_code=308)
 
     return app
 
@@ -320,7 +377,12 @@ async def _handle(services: AppServices, ws: WebSocket, data: Any) -> None:
         elif kind == "cancel_job":
             services.cancel_job(int(data["message_id"]))
         elif kind == "voice":
-            result["conversation_id"] = await services.set_voice(bool(data.get("on")), cid)
+            audio = None
+            if data.get("on") and data.get("audio") == "browser":
+                from friday.voice.adapters.browser_io import BrowserAudio
+
+                audio = BrowserAudio(ws.send_bytes, owner=ws)
+            result["conversation_id"] = await services.set_voice(bool(data.get("on")), cid, audio)
         else:
             raise FridayError(f"unknown request {kind!r}")
         if request_id is not None:

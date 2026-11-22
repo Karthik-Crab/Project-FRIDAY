@@ -91,6 +91,10 @@ class VoiceSettings(_Strict):
 
     sentence_pause_ms: float = Field(default=250.0, ge=0, le=1500)
     max_chunk_chars: int = Field(default=300, ge=40, le=500)
+    # "browser": the microphone and speaker of the device that switched voice on
+    # (phone, laptop or this PC), with the browser's echo cancellation.
+    # "device": this PC's own microphone and speakers (input_/output_device).
+    audio: Literal["browser", "device"] = "browser"
     input_device: int | str | None = None
     output_device: int | str | None = None
     end_silence_ms: float = Field(default=700.0, ge=200, le=3000)
@@ -241,6 +245,9 @@ class AppSettings(_Strict):
     # Let phones and laptops on the home network in, after a passcode
     # (set it with ``friday passcode``). Never reachable from the internet.
     lan: bool = False
+    # Devices use https on this port (FRIDAY's home certificate). The old
+    # address on ``port`` shows a setup page and forwards here.
+    lan_port: int = Field(default=8443, ge=1024, le=65535)
     # ffmpeg changes attached songs (more bass). "" = find it on the PATH.
     ffmpeg: str = ""
     # How much of an attached document the talking model reads (characters).

@@ -113,6 +113,7 @@ class VoiceControl(Protocol):
         engine: ConversationEngine,
         conversation_id: str,
         on_event: Callable[[object], None],
+        audio: Any = None,
     ) -> None: ...
 
     async def stop(self) -> None: ...
@@ -138,8 +139,13 @@ class AppServices:
         song_ai: SongEditor | None = None,
         vocals: VocalSplitter | None = None,
         helper_folders: Sequence[Path] = (),
+        voice_audio: str = "device",
     ) -> None:
         self.store = store
+        # "browser": voice mode uses the microphone and speaker of the page that
+        # switched it on; "device": this PC's own.
+        self.voice_audio_kind = voice_audio
+        self.voice_audio: Any = None  # the BrowserAudio in use, if any
         # Where ComfyUI and ACE-Step keep their own copies of what they were given
         # and what they made. Cleaned after each job of an incognito chat.
         self.helper_folders = tuple(helper_folders)
@@ -197,6 +203,7 @@ class AppServices:
             "voice_available": bool(self.voice and self.voice.available),
             "voice": self.voice.state if self.voice else "off",
             "voice_conversation": self.voice.conversation_id if self.voice else None,
+            "voice_audio": self.voice_audio_kind,
             "can_attach": self.uploads_dir is not None,
             "can_think": self.can_think,
             "can_read": {
@@ -1055,26 +1062,43 @@ class AppServices:
 
     # Voice
 
-    async def set_voice(self, on: bool, conversation_id: str | None) -> str | None:
+    async def set_voice(
+        self, on: bool, conversation_id: str | None, audio: Any = None
+    ) -> str | None:
+        """``audio``: the page's microphone and speaker (browser voice)."""
         voice = self.voice
         if voice is None or not voice.available:
             raise FridayError("voice mode is not set up")
         if not on:
             await voice.stop()
+            self._release_audio()
             if self.studio is not None:
                 self.studio.on_done = None
             self.emit(self.status())
             return None
+        if self.voice_audio_kind == "browser" and audio is None:
+            raise FridayError("this page can't use its microphone for voice mode")
         cid = self.conversation_id(conversation_id)
         if voice.state != "off":
-            if voice.conversation_id == cid:
+            same_device = audio is None or (
+                self.voice_audio is not None and self.voice_audio.owner is audio.owner
+            )
+            if voice.conversation_id == cid and same_device:
                 return cid
-            await voice.stop()
+            await voice.stop()  # another chat, or another device takes over
+            self._release_audio()
         engine = self.engine(cid)
         self.emit({**self.status(), "voice": "starting", "voice_conversation": cid})
         try:
-            await voice.start(engine, cid, lambda event: self._on_voice_event(cid, event))
+            if audio is not None:
+                self.voice_audio = audio
+                await voice.start(
+                    engine, cid, lambda event: self._on_voice_event(cid, event), audio=audio
+                )
+            else:
+                await voice.start(engine, cid, lambda event: self._on_voice_event(cid, event))
         except Exception:
+            self._release_audio()
             self.emit(self.status())
             raise
         if self.studio is not None:
@@ -1082,8 +1106,20 @@ class AppServices:
         self.emit(self.status())
         return cid
 
+    def _release_audio(self) -> None:
+        audio, self.voice_audio = self.voice_audio, None
+        if audio is not None:
+            audio.close()
+
+    def voice_page_gone(self, owner: object) -> None:
+        """A page's live connection closed: if it had voice mode, voice ends."""
+        audio = self.voice_audio
+        if audio is not None and audio.owner is owner:
+            audio.close(tell_page=False)  # the session notices and stops by itself
+
     def _voice_stopped(self, error: str | None) -> None:
         """Voice mode ended by itself (for example, the microphone went away)."""
+        self._release_audio()
         if self.studio is not None:
             self.studio.on_done = None
         self.emit(self.status())

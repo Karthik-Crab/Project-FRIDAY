@@ -58,18 +58,25 @@ def home_host(host_header: str | None) -> bool:
     return is_home_network(name) or is_this_computer(name)
 
 
-def addresses(port: int) -> list[str]:
-    """How other devices can reach this computer, best first."""
-    out: list[str] = []
+def home_ip() -> str | None:
+    """This computer's address on the home network."""
     with contextlib.suppress(OSError), socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.connect(("192.0.2.1", 9))  # picks the outgoing interface; nothing is sent
-        ip = s.getsockname()[0]
+        ip = str(s.getsockname()[0])
         if is_home_network(ip):
-            out.append(f"http://{ip}:{port}/")
-    name = socket.gethostname().split(".")[0]
-    if name:
-        out.append(f"http://{name}.local:{port}/")
-    return out
+            return ip
+    return None
+
+
+def local_name() -> str | None:
+    name = socket.gethostname().split(".")[0].lower()
+    return f"{name}.local" if name and name != "localhost" else None
+
+
+def addresses(port: int, scheme: str = "https") -> list[str]:
+    """How other devices can reach this computer, best first."""
+    hosts = [h for h in (local_name(), home_ip()) if h]
+    return [f"{scheme}://{h}:{port}/" for h in hosts]
 
 
 def _hash(passcode: str, salt: bytes) -> bytes:
@@ -188,3 +195,57 @@ button{border:0;background:var(--accent);color:#fff;font-weight:600}
 
 def login_page(message: str = "") -> str:
     return LOGIN_PAGE.replace("{message}", f'<p class="err">{message}</p>' if message else "")
+
+
+SETUP_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FRIDAY setup</title><style>
+:root{color-scheme:light dark;--bg:#f6f5f2;--fg:#1d1c1a;--card:#fff;--line:#d9d6cf;--accent:#c96442}
+@media (prefers-color-scheme:dark){:root{--bg:#1f1e1c;--fg:#ecebe7;--card:#2a2926;--line:#3b3a36}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,sans-serif}
+main{max-width:560px;margin:0 auto;padding:24px 16px 40px}
+h1{font-size:24px;margin:0 0 6px}h2{font-size:17px;margin:26px 0 8px}
+p,li{margin:0 0 8px}ol{padding-left:22px;margin:0}.muted{opacity:.75;font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+padding:16px 18px;margin-top:16px}
+a.button{display:block;text-align:center;text-decoration:none;background:var(--accent);color:#fff;
+font-weight:600;padding:12px;border-radius:10px;margin:12px 0 4px}
+a.plain{color:var(--accent)}details{margin-top:10px}summary{cursor:pointer;font-weight:600}
+</style></head><body><main>
+<h1>Set up FRIDAY on this device</h1>
+<p class="muted" id="checking">Checking whether this device is set up already…</p>
+<div class="card">
+<p>FRIDAY now uses a secure connection, so this device can use its microphone and
+everything you send is encrypted. Do this once per device; it takes about two minutes.</p>
+<h2>1. Download FRIDAY's home certificate</h2>
+<a class="button" href="/FRIDAY-home.crt" download>Download certificate</a>
+<p class="muted">It only works for addresses inside your home, so it can't be misused
+for other websites.</p>
+<h2>2. Install it (Android)</h2>
+<ol>
+<li>Open <b>Settings</b> and search for <b>CA certificate</b>.</li>
+<li>Tap it, then <b>Install anyway</b>. Unlock the phone if it asks.</li>
+<li>Pick <b>FRIDAY-home.crt</b> from Downloads.</li>
+</ol>
+<p class="muted">If the search finds nothing: Settings → Security &amp; privacy → More security
+settings → Encryption &amp; credentials → Install a certificate → CA certificate.</p>
+<details><summary>Laptop instead (Windows or Mac)</summary>
+<p><b>Windows:</b> open the downloaded file → Install Certificate → Current User →
+"Place all certificates in the following store" → Browse → <b>Trusted Root Certification
+Authorities</b> → Next → Finish → Yes. Then restart the browser.</p>
+<p><b>Mac:</b> open the file (Keychain Access opens) → double-click "FRIDAY home" →
+Trust → "When using this certificate: Always Trust". Then restart the browser.</p>
+<p><b>Firefox:</b> Settings → search "certificates" → View Certificates → Authorities →
+Import → pick the file → tick "Trust this CA to identify websites".</p>
+</details>
+<h2>3. Open FRIDAY securely</h2>
+<a class="button" href="{secure}">Open FRIDAY</a>
+<p class="muted">Then enter your passcode. Add that page to your home screen.</p>
+</div></main>
+<script>
+fetch("{secure}login", { mode: "no-cors", cache: "no-store" })
+  .then(() => location.replace("{secure}"))
+  .catch(() => {
+    document.getElementById("checking").textContent = "This device isn't set up yet.";
+  });
+</script></body></html>"""

@@ -62,6 +62,9 @@ stt_model = "base.en"            # fast on a laptop CPU; "small.en" is more accu
 # stt_beam_size = 5              # fewer misheard words, somewhat slower (default 1)
 # Compare models without editing this file:  friday listen --model small.en
 # stt_vocabulary = ["Risk Crawler"]   # names and jargon it should recognise
+audio = "browser"                # "browser" = the device you switch voice on from listens and
+                                 # speaks, with its echo cancellation; "device" = this PC's own
+                                 # microphone and speakers (no echo cancellation: use a headset)
 stt_device = "cpu"               # no NVIDIA GPU: CPU with int8 is the fast path
 stt_compute_type = "int8"
 tts_model_path = "models/kokoro-v1.0.onnx"
@@ -170,6 +173,8 @@ document_chars = 14000           # how much of an attached document goes to the 
 lan = false                      # true = phones/laptops on the home network may open FRIDAY
                                  # after a passcode (set it with `friday passcode`); never
                                  # reachable from the internet. Without a passcode: this PC only.
+lan_port = 8443                  # secure (https) port for home devices; `port` on the home
+                                 # network then only shows the certificate setup page
 
 # To let the app start the expressive voice only while voice mode is on, add
 # under [voice] (adjust the paths):

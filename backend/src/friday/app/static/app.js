@@ -128,12 +128,14 @@ function timeAgo(t) {
 // ---- live connection -----------------------------------------------------
 
 function connect() {
-  const ws = new WebSocket(`ws://${location.host}/ws`);
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
   state.ws = ws;
-  ws.onmessage = (e) => onEvent(JSON.parse(e.data));
+  ws.onmessage = (e) => (typeof e.data === "string" ? onEvent(JSON.parse(e.data)) : voiceAudio(e.data));
   ws.onopen = () => { connect.delay = 500; };
   ws.onclose = () => {
     state.ws = null;
+    stopBrowserAudio(); // the server ends voice mode for a page that went away
     connect.delay = Math.min((connect.delay || 500) * 2, 8000);
     setTimeout(connect, connect.delay);
   };
@@ -667,11 +669,14 @@ function applyStatus(s) {
   els.voice.disabled = !s.voice_available || s.voice === "starting" || s.voice === "stopping";
   els.voice.title = s.voice_available ? "Talk to FRIDAY" : "Voice mode isn't set up";
   const on = s.voice === "on";
-  els.voice.setAttribute("aria-pressed", on ? "true" : "false");
+  const elsewhere = on && s.voice_audio === "browser" && !mic.live && !mic.ctx;
+  els.voice.setAttribute("aria-pressed", on && !elsewhere ? "true" : "false");
   els.voice.classList.toggle("busy", s.voice === "starting" || s.voice === "stopping");
-  els.voiceLabel.textContent = { starting: "Starting voice…", stopping: "Stopping…", on: "Voice on" }[s.voice] || "Voice";
+  els.voiceLabel.textContent = elsewhere ? "Voice (on another device)"
+    : ({ starting: "Starting voice…", stopping: "Stopping…", on: "Voice on" }[s.voice] || "Voice");
   els.voiceBar.classList.toggle("hidden", !on);
   if (on) showVoiceState("listening");
+  if (s.voice === "off") stopBrowserAudio();
   renderList();
 }
 
@@ -682,12 +687,126 @@ function showVoiceState(st) {
 }
 
 async function toggleVoice() {
-  const on = state.status.voice !== "on";
+  // "On" here means "this page has voice"; another device may have it instead.
+  const on = !(state.status.voice === "on" && (state.status.voice_audio !== "browser" || mic.live));
+  const browser = on && state.status.voice_audio === "browser";
   try {
+    if (browser) await startBrowserAudio(); // first, while the tap still counts
     if (on && !state.current) await newConversation();
-    const reply = await send({ type: "voice", on, conversation_id: state.current });
+    const reply = await send({ type: "voice", on, conversation_id: state.current, audio: browser ? "browser" : undefined });
+    if (browser) { mic.live = true; applyStatus(state.status); }
     if (on && reply.conversation_id && reply.conversation_id !== state.current) openConversation(reply.conversation_id);
-  } catch (e) { toast(e.message); }
+  } catch (e) {
+    if (browser) stopBrowserAudio();
+    toast(e.message);
+  }
+}
+
+// ---- voice through this device's microphone and speaker -------------------
+// The browser cleans the microphone (echo cancellation, noise suppression,
+// level), so FRIDAY doesn't hear her own voice from the speaker.
+
+const mic = { ctx: null, stream: null, out: null, next: 0, sources: [], live: false, el: null, peers: [] };
+
+async function startBrowserAudio() {
+  stopBrowserAudio();
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    throw new Error("This address can't use the microphone. Open FRIDAY at its secure https address (see the setup page).");
+  }
+  const ctx = new AudioContext();
+  mic.ctx = ctx;
+  const resumed = ctx.resume();
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+    });
+  } catch (e) {
+    throw new Error(e && e.name === "NotAllowedError"
+      ? "FRIDAY wasn't allowed to use the microphone. Allow it in the browser's site settings."
+      : `The microphone didn't start: ${e.message || e}`);
+  }
+  mic.stream = stream;
+  await resumed;
+  await ctx.audioWorklet.addModule("/static/voice-worklet.js");
+  const node = new AudioWorkletNode(ctx, "friday-mic");
+  node.port.onmessage = (e) => {
+    if (mic.live && state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(e.data);
+  };
+  ctx.createMediaStreamSource(stream).connect(node);
+  const silent = ctx.createGain();
+  silent.gain.value = 0;
+  node.connect(silent).connect(ctx.destination); // keeps the capture running
+  mic.out = await speakerOutput(ctx);
+}
+
+// Desktop Chrome removes echo only for sound that arrives like a video call,
+// so there FRIDAY's voice is passed through a call to itself inside the page.
+// Firefox and phones remove echo from everything they play.
+async function speakerOutput(ctx) {
+  const ua = navigator.userAgent;
+  if (!/Chrome\//.test(ua) || /Android|Mobile/.test(ua) || typeof RTCPeerConnection === "undefined") return ctx.destination;
+  try {
+    const dest = ctx.createMediaStreamDestination();
+    const a = new RTCPeerConnection();
+    const b = new RTCPeerConnection();
+    a.onicecandidate = (e) => e.candidate && b.addIceCandidate(e.candidate);
+    b.onicecandidate = (e) => e.candidate && a.addIceCandidate(e.candidate);
+    const arrived = new Promise((resolve) => { b.ontrack = (e) => resolve(e.streams[0] || new MediaStream([e.track])); });
+    for (const t of dest.stream.getTracks()) a.addTrack(t, dest.stream);
+    const offer = await a.createOffer();
+    await a.setLocalDescription(offer);
+    await b.setRemoteDescription(offer);
+    const answer = await b.createAnswer();
+    await b.setLocalDescription(answer);
+    await a.setRemoteDescription(answer);
+    const remote = await Promise.race([arrived, new Promise((_, no) => setTimeout(() => no(new Error("no call")), 4000))]);
+    const el = new Audio();
+    el.srcObject = remote;
+    await el.play();
+    mic.el = el;
+    mic.peers = [a, b];
+    return dest;
+  } catch {
+    return ctx.destination;
+  }
+}
+
+function voiceAudio(buffer) {
+  const kind = new Uint8Array(buffer, 0, 1)[0];
+  if (kind === 0x53 /* S */) { stopSpeaking(); return; }
+  if (kind === 0x58 /* X */) { stopBrowserAudio(); return; }
+  if (kind !== 0x41 /* A */ || !mic.ctx || !mic.out) return;
+  const rate = new DataView(buffer).getUint32(1);
+  const pcm = new Int16Array(buffer.slice(5));
+  if (!pcm.length) return;
+  const audio = mic.ctx.createBuffer(1, pcm.length, rate);
+  const data = audio.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) data[i] = pcm[i] / 32768;
+  const source = mic.ctx.createBufferSource();
+  source.buffer = audio;
+  source.connect(mic.out);
+  const at = Math.max(mic.ctx.currentTime + 0.03, mic.next);
+  source.start(at);
+  mic.next = at + audio.duration;
+  mic.sources.push(source);
+  source.onended = () => { mic.sources = mic.sources.filter((s) => s !== source); };
+}
+
+function stopSpeaking() {
+  for (const s of mic.sources) { try { s.stop(); } catch { /* already over */ } }
+  mic.sources = [];
+  mic.next = 0;
+}
+
+function stopBrowserAudio() {
+  mic.live = false;
+  stopSpeaking();
+  if (mic.stream) for (const t of mic.stream.getTracks()) t.stop();
+  for (const p of mic.peers) { try { p.close(); } catch { /* closed */ } }
+  if (mic.el) { mic.el.srcObject = null; }
+  if (mic.ctx) mic.ctx.close().catch(() => {});
+  Object.assign(mic, { ctx: null, stream: null, out: null, next: 0, sources: [], el: null, peers: [] });
 }
 
 // ---- wiring --------------------------------------------------------------

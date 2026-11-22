@@ -833,6 +833,7 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
         song_ai=_song_ai(config, here, ffmpeg),
         vocals=_vocals(config),
         helper_folders=_helper_folders(config),
+        voice_audio=config.voice.audio,
     )
     port = config.app.port
     from friday.app.lan import HomeAccess, addresses
@@ -842,20 +843,57 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
         print("Home-network access is switched on but has no passcode yet, so FRIDAY")
         print("stays on this computer only. Set one with:  friday passcode")
         access = None
+    app = create_app(services, port=port, access=access)
+    # This PC: plain http on 127.0.0.1 (browsers treat that as secure already).
     server = uvicorn.Server(
-        uvicorn.Config(
-            create_app(services, port=port, access=access),
-            host="0.0.0.0" if access is not None else "127.0.0.1",
-            port=port,
-            log_level="warning",
-            proxy_headers=False,  # the device's own address decides, never a header
-        )
+        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", proxy_headers=False)
     )
+    extra: list[uvicorn.Server] = []
     url = f"http://127.0.0.1:{port}/"
     if access is not None:
+        from friday.app import tls
+        from friday.app.lan import home_ip, local_name
+        from friday.app.server import create_setup_app
+
+        ip = home_ip()
+        cert = tls.ensure(here / "tls", [n for n in [local_name()] if n], [ip] if ip else [])
+        lan_port = config.app.lan_port
+        # Home devices: https only, with FRIDAY's home certificate. The device's
+        # own address decides who it is, never a header (proxy_headers off).
+        extra.append(
+            uvicorn.Server(
+                uvicorn.Config(
+                    app,
+                    host="0.0.0.0",
+                    port=lan_port,
+                    log_level="warning",
+                    proxy_headers=False,
+                    lifespan="off",
+                    ssl_certfile=str(cert.cert_file),
+                    ssl_keyfile=str(cert.key_file),
+                )
+            )
+        )
+        if ip:  # the old address: setup page and certificate, then forwards to https
+            extra.append(
+                uvicorn.Server(
+                    uvicorn.Config(
+                        create_setup_app(lan_port, cert.ca_file),
+                        host=ip,
+                        port=port,
+                        log_level="warning",
+                        proxy_headers=False,
+                        lifespan="off",
+                    )
+                )
+            )
         print("Phones and laptops on your home network can open FRIDAY (passcode needed) at:")
-        for address in addresses(port):
+        for address in addresses(lan_port):
             print(f"    {address}")
+        setup = [a for a in addresses(port, "http") if ip and (ip in a or ".local" in a)]
+        if setup:
+            print(f"New device? Open {setup[0]} on it first to install FRIDAY's home certificate.")
+        print(f"Home certificate code: {tls.short_code(cert.fingerprint)}")
 
     async def when_ready() -> None:
         while not server.started:  # noqa: ASYNC110 (uvicorn offers no event)
@@ -869,9 +907,17 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
             await _warm_up_local(router, skip=config.studio.gpu_occasional)
 
     ready = asyncio.create_task(when_ready())
+    # The extra listeners start first so that Ctrl+C reaches the main one,
+    # which passes it on when it closes.
+    others = [asyncio.create_task(x.serve()) for x in extra]
+    await asyncio.sleep(0)
     try:
         await server.serve()
     finally:
+        for x in extra:
+            x.should_exit = True
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(asyncio.gather(*others, return_exceptions=True), 10)
         ready.cancel()
         await voice.aclose()
 
