@@ -35,7 +35,7 @@ from friday.integrations.web import (
 from friday.llm.base import ProviderInfo
 from friday.llm.router import ProviderRouter, StreamResult
 from friday.persona.commands import parse_command
-from friday.persona.persona import Channel, Mode, Persona
+from friday.persona.persona import Channel, Mode, Persona, without_sounds
 
 log = logging.getLogger(__name__)
 
@@ -304,7 +304,7 @@ class ConversationEngine:
             completed = True
         finally:
             turn.provider = result.provider
-            text = "".join(parts).strip()
+            text = without_sounds("".join(parts))
             if text:
                 turn.full_text = text
                 self.window.add_assistant(text if completed else text + INTERRUPTED_MARKER)
@@ -432,7 +432,7 @@ class ConversationEngine:
         """Replace the last reply with the part the user actually heard."""
         if not self.last_turn.stored:
             return  # interrupted before anything was stored, or a command ack
-        heard = heard_text.strip() or "(nothing heard)"
+        heard = without_sounds(heard_text) or "(nothing heard)"
         self.window.replace_last_assistant(heard + INTERRUPTED_MARKER)
 
     def discard_turn(self) -> None:

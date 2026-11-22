@@ -1120,3 +1120,17 @@ with real speakers.
   service ran out of graphics memory on the first try and worked on the next.
 - The old `http://…:8765/` address on home devices now only shows the setup page and
   sends everything else to the secure address.
+
+## Mute button and fewer laughs (2026-11-22)
+
+- **Mute.** While voice mode is on, the voice bar has a **🎙 Mute** button. Muted, the
+  microphone sends only silence, so FRIDAY hears nothing; her own voice keeps
+  playing. Tap **🔇 Unmute** to talk again. Switching voice off un-mutes. It works on
+  the device that has voice (phone, laptop or the PC's browser). Tested in Firefox:
+  muted frames were completely silent and un-muting brought the sound back.
+- **Fewer laughs and sighs.** The local AI was told to laugh or sigh in at most one
+  reply in three, but put a sound in almost every reply. Now FRIDAY's code enforces
+  it: at most one sound in a reply, and at most one reply in four. The AI is also
+  told to sigh only when something is truly sad or tiring. The marks no longer show
+  in the chat, and they are left out of what the AI sees of earlier replies, so it
+  stops copying its own habit.

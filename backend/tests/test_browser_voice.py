@@ -186,3 +186,28 @@ def test_the_setup_page_serves_the_certificate_and_forwards_to_https(tmp_path: P
     assert phone.get("/", headers={"host": "evil.example:8765"}).status_code == 403
     outsider = TestClient(app, base_url="http://192.168.0.110:8765", client=("8.8.8.8", 5000))
     assert outsider.get("/FRIDAY-home.crt").status_code == 403
+
+
+# Laughs and sighs ----------------------------------------------------------
+
+
+def test_friday_laughs_now_and_then_not_in_every_reply() -> None:
+    from friday.voice.sanitize import SoundBudget, SpeechSanitizer
+
+    sounds = SoundBudget(every=4)
+    spoken = []
+    for _ in range(8):  # the model puts two sounds in every reply
+        sounds.new_reply()
+        clean = SpeechSanitizer(("laugh", "sigh", "chuckle"), sounds).clean
+        spoken.append(clean("Ha [chuckle] that's good. [sigh] Anyway."))
+    with_sound = [i for i, s in enumerate(spoken) if "[" in s]
+    assert with_sound == [0, 4]
+    assert spoken[0].count("[") == 1  # one sound per reply at most
+    assert spoken[1] == "Ha that's good. Anyway."
+
+
+def test_sound_marks_stay_out_of_the_history() -> None:
+    from friday.persona.persona import without_sounds
+
+    assert without_sounds("Oh no [laugh] that's a classic. [Sigh]") == "Oh no that's a classic."
+    assert without_sounds("See [the docs] here") == "See [the docs] here"

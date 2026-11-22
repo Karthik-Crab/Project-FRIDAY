@@ -34,13 +34,39 @@ _EMOJI = re.compile("[\U0001f300-\U0001faff\U00002600-\U000027bf\U0001f000-\U000
 _SPACES = re.compile(r"[ \t]{2,}")
 
 
+class SoundBudget:
+    """How often FRIDAY may laugh, chuckle or sigh out loud.
+
+    Small local models are asked to use these sounds rarely but put them in
+    almost every reply, which sounds odd fast. This keeps it to one sound in a
+    reply, in at most one reply out of ``every``; extra marks are dropped.
+    """
+
+    def __init__(self, every: int = 4) -> None:
+        self.every = every
+        self._reply = 0
+        self._last: int | None = None  # the reply that last had a sound
+
+    def new_reply(self) -> None:
+        self._reply += 1
+
+    def allow(self) -> bool:
+        if self._last is not None and self._reply - self._last < self.every:
+            return False
+        self._last = self._reply
+        return True
+
+
 class SpeechSanitizer:
     """Stateful because fenced code blocks can span several chunks."""
 
-    def __init__(self, expression_tags: Iterable[str] = ()) -> None:
+    def __init__(
+        self, expression_tags: Iterable[str] = (), sounds: SoundBudget | None = None
+    ) -> None:
         # Sounds the voice can make itself, written as [laugh]. Empty for a
         # voice that can only read words: every stage direction is then removed.
         self._tags = frozenset(expression_tags)
+        self._sounds = sounds
         self._in_code = False
         self._announced_code = False
 
@@ -73,6 +99,8 @@ class SpeechSanitizer:
             return match.group()
         for pattern, tag in _TAG_FOR:
             if tag in self._tags and pattern.match(inner):
+                if self._sounds is not None and not self._sounds.allow():
+                    return ""
                 return f" [{tag}] "
         return ""
 

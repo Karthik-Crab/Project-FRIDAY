@@ -68,7 +68,7 @@ from friday.voice.base import (
 )
 from friday.voice.chunker import SentenceChunker
 from friday.voice.control import ControlIntent, classify, is_filler, is_implausible
-from friday.voice.sanitize import SpeechSanitizer
+from friday.voice.sanitize import SoundBudget, SpeechSanitizer
 from friday.voice.segmenter import (
     SegmenterConfig,
     SpeechStarted,
@@ -197,6 +197,7 @@ class VoiceSession:
         self._turn_is_notice = False
         self._transcribing = False
         self._ack_index = 0
+        self._sounds = SoundBudget()  # laughs and sighs: now and then, not every reply
         self._turn: asyncio.Task[None] | None = None
         self._interrupt_reason: str | None = None
         self._stop_requested = False  # explicit, cancellation-independent stop
@@ -549,7 +550,8 @@ class VoiceSession:
     ) -> None:
         loop = asyncio.get_running_loop()
         chunker = SentenceChunker()
-        sanitizer = SpeechSanitizer(getattr(self.tts, "expression_tags", ()))
+        self._sounds.new_reply()
+        sanitizer = SpeechSanitizer(getattr(self.tts, "expression_tags", ()), self._sounds)
         first = True
         pending: list[str] = []  # complete sentences not yet synthesised
         more = asyncio.Event()

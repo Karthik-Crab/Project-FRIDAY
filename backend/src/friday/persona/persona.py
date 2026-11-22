@@ -8,6 +8,7 @@ core identity.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -135,8 +136,19 @@ Your voice can make a few sounds itself: {marks}. This replaces the rule about
 stage directions for these marks only. Write the mark exactly like that, in
 square brackets, inside the sentence at the point where the sound belongs, for
 example "Oh no [laugh] that is such a classic mistake." Use one only when the
-feeling is real, in at most one reply out of three, and never more than one in
-a reply. Nothing else goes in brackets."""
+feeling is really strong: most replies have none, at most one reply in five has
+one, and never more than one in a reply. Do not sigh unless something is truly
+sad or tiring. Nothing else goes in brackets."""
+
+
+SOUND_MARKS = ("laugh", "chuckle", "sigh", "gasp")
+_SOUND_MARK = re.compile(r" ?\[(?:" + "|".join(SOUND_MARKS) + r")\]", re.IGNORECASE)
+
+
+def without_sounds(text: str) -> str:
+    """The reply without [laugh]-style marks: they are for the voice only, and
+    left in the history the model copies them into ever more replies."""
+    return _SOUND_MARK.sub("", text).strip()
 
 
 @dataclass(frozen=True, slots=True)

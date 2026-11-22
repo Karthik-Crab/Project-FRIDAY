@@ -9,7 +9,7 @@ const els = {
   voiceStatus: $("voice-status"), voicePartial: $("voice-partial"), models: $("models"),
   sidebar: $("sidebar"), toast: $("toast"), chips: $("chips"), hint: $("hint"),
   tray: $("tray"), attach: $("attach"), fileInput: $("file-input"), drop: $("drop"),
-  think: $("think-toggle"),
+  think: $("think-toggle"), mute: $("mute"),
 };
 
 const state = {
@@ -203,7 +203,7 @@ function onEvent(ev) {
       if (d) {
         if (!d.text) { stopWaitingTimer(d); d.body.classList.add("cursor"); }
         d.text += ev.text;
-        d.body.innerHTML = markdown(d.text);
+        d.body.innerHTML = markdown(noSounds(d.text));
         scrollDown();
       }
       break;
@@ -344,6 +344,9 @@ function putMessage(m) {
   if (atBottom || !old) scrollDown(!old);
 }
 
+// [laugh], [sigh] and the like are for FRIDAY's voice, not for reading.
+const noSounds = (text) => (text || "").replace(/ ?\[(?:laugh|chuckle|sigh|gasp)\]/gi, "");
+
 function renderMessage(m) {
   const el = document.createElement("div");
   el.dataset.id = m.id;
@@ -369,7 +372,7 @@ function renderMessage(m) {
   const links = sources.length
     ? `<div class="sources">🌐 ${sources.map((s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" title="${esc(s.title)}">${esc(s.site || s.url)}</a>`).join("")}</div>`
     : "";
-  el.innerHTML = `<div class="body">${markdown(m.content)}</div>${links}${who.length ? `<div class="tag">${who.map(esc).map((w) => `<span>${w}</span>`).join("")}</div>` : ""}`;
+  el.innerHTML = `<div class="body">${markdown(noSounds(m.content))}</div>${links}${who.length ? `<div class="tag">${who.map(esc).map((w) => `<span>${w}</span>`).join("")}</div>` : ""}`;
   return el;
 }
 
@@ -675,12 +678,15 @@ function applyStatus(s) {
   els.voiceLabel.textContent = elsewhere ? "Voice (on another device)"
     : ({ starting: "Starting voice…", stopping: "Stopping…", on: "Voice on" }[s.voice] || "Voice");
   els.voiceBar.classList.toggle("hidden", !on);
+  els.mute.classList.toggle("hidden", !(on && mic.live));
   if (on) showVoiceState("listening");
   if (s.voice === "off") stopBrowserAudio();
   renderList();
 }
 
 function showVoiceState(st) {
+  mic.shown = st;
+  if (mic.muted) { els.voiceStatus.textContent = st === "speaking" ? "Speaking… (you're muted)" : "Muted: FRIDAY can't hear you"; return; }
   els.voiceStatus.textContent = {
     listening: "Listening…", user_speaking: "Hearing you…", thinking: "Thinking…", speaking: "Speaking…",
   }[st] || st;
@@ -706,7 +712,19 @@ async function toggleVoice() {
 // The browser cleans the microphone (echo cancellation, noise suppression,
 // level), so FRIDAY doesn't hear her own voice from the speaker.
 
-const mic = { ctx: null, stream: null, out: null, next: 0, sources: [], live: false, el: null, peers: [] };
+const mic = { ctx: null, stream: null, out: null, next: 0, sources: [], live: false, el: null, peers: [], muted: false, shown: "listening" };
+
+// Mute: the microphone sends silence, so FRIDAY hears nothing (and finishes
+// anything you'd started saying). Her own voice keeps playing.
+function setMuted(muted) {
+  mic.muted = muted;
+  if (mic.stream) for (const t of mic.stream.getAudioTracks()) t.enabled = !muted;
+  els.mute.setAttribute("aria-pressed", muted ? "true" : "false");
+  els.mute.textContent = muted ? "🔇 Unmute" : "🎙 Mute";
+  els.mute.title = muted ? "Let FRIDAY hear you again" : "Mute the microphone";
+  els.voiceBar.classList.toggle("muted", muted);
+  showVoiceState(mic.shown);
+}
 
 async function startBrowserAudio() {
   stopBrowserAudio();
@@ -807,6 +825,8 @@ function stopBrowserAudio() {
   if (mic.el) { mic.el.srcObject = null; }
   if (mic.ctx) mic.ctx.close().catch(() => {});
   Object.assign(mic, { ctx: null, stream: null, out: null, next: 0, sources: [], el: null, peers: [] });
+  if (mic.muted) setMuted(false);
+  els.mute.classList.add("hidden");
 }
 
 // ---- wiring --------------------------------------------------------------
@@ -826,6 +846,7 @@ $("new-incognito").addEventListener("click", () => { openConversation(null, true
 $("open-sidebar").addEventListener("click", () => els.sidebar.classList.add("open"));
 $("close-sidebar").addEventListener("click", () => els.sidebar.classList.remove("open"));
 els.voice.addEventListener("click", toggleVoice);
+els.mute.addEventListener("click", () => setMuted(!mic.muted));
 els.think.addEventListener("click", () => {
   state.think = !state.think;
   try { localStorage.setItem("friday.think", state.think ? "on" : "off"); } catch { /* not kept */ }
