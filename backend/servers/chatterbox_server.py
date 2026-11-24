@@ -11,8 +11,15 @@ a stand-in that has the same call signatures as chatterbox-tts 0.1.7. It has
 never been run with the real Chatterbox model.
 
 Endpoints
-    GET  /health  -> {"ok": true, "model": ..., "device": ..., "sample_rate": ...}
+    GET  /health  -> {"ok": true, "model": ..., "device": ..., "sample_rate": ...,
+                      "on_card": true|false}
     POST /speak   {"text": "..."} -> raw 16-bit mono PCM, rate in X-Sample-Rate
+                  (503 while parked: FRIDAY then uses her built-in voice)
+    POST /card    {"on": true|false} -> move the model onto the graphics card or
+                  back into RAM (about half a second either way)
+
+With FRIDAY_VOICE_PARKED=1 the model loads into RAM only and waits there
+("parked") until FRIDAY moves it onto the card for voice mode.
 
 This file imports nothing from FRIDAY, so it can be copied and run alone.
 """
@@ -21,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,16 +46,23 @@ class Voice(Protocol):
     def speak(self, text: str) -> bytes: ...
 
 
+class Parked(Exception):
+    """The model is in RAM, not on the card."""
+
+
 class ChatterboxVoice:
     """The real model. Imported lazily so tests need neither torch nor a GPU."""
 
-    def __init__(self, device: str, reference: str | None) -> None:
+    def __init__(self, device: str, reference: str | None, parked: bool = False) -> None:
         from chatterbox.tts_turbo import ChatterboxTurboTTS
 
         self.name = "chatterbox-turbo"
-        self.device = device
+        self.target = device  # where it runs when it is on the card
+        self.device = "cpu" if parked else device
+        self.parked = parked and device != "cpu"
+        self._warm = False
         # Chatterbox 0.1.7 takes the device and nothing else here.
-        self._model: Any = ChatterboxTurboTTS.from_pretrained(device)
+        self._model: Any = ChatterboxTurboTTS.from_pretrained(self.device)
         self.sample_rate = int(self._model.sr)
         self._reference: str | None = None
         if reference:
@@ -62,9 +77,43 @@ class ChatterboxVoice:
                 "clean recording (longer than 5 seconds) of a voice you may use."
             )
 
+    def move(self, on_card: bool) -> None:
+        """Onto the graphics card, or back into RAM (freeing the card)."""
+        device = self.target if on_card else "cpu"
+        if device != self.device:
+            import torch
+
+            try:
+                self._place(device)
+            except Exception:
+                if device != "cpu":  # e.g. the card was full: back to RAM, whole
+                    self._place("cpu")
+                    self.parked = True
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                raise
+            if device == "cpu" and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        self.parked = not on_card and self.target != "cpu"
+        if on_card and not self._warm:
+            self._warm = True
+            self.speak("Ready.")  # the first sentence on the card is slow
+
+    def _place(self, device: str) -> None:
+        m = self._model
+        m.t3.to(device)
+        m.s3gen.to(device)
+        m.ve.to(device)
+        if m.conds is not None:
+            m.conds = m.conds.to(device)
+        m.device = device
+        self.device = device
+
     def speak(self, text: str) -> bytes:
         import numpy as np
 
+        if self.parked:
+            raise Parked
         if self._reference:
             wav = self._model.generate(text, audio_prompt_path=self._reference)
         else:
@@ -96,10 +145,14 @@ def make_handler(voice: Voice) -> type[BaseHTTPRequestHandler]:
                     "model": voice.name,
                     "device": voice.device,
                     "sample_rate": voice.sample_rate,
+                    "on_card": not getattr(voice, "parked", False),
                 },
             )
 
         def do_POST(self) -> None:
+            if self.path == "/card" and hasattr(voice, "move"):
+                self._card()
+                return
             if self.path != "/speak":
                 self._json(404, {"error": "not found"})
                 return
@@ -121,6 +174,9 @@ def make_handler(voice: Voice) -> type[BaseHTTPRequestHandler]:
             try:
                 with lock:
                     pcm = voice.speak(text)
+            except Parked:
+                self._json(503, {"error": "the voice is parked in RAM"})
+                return
             except Exception as exc:
                 self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
                 return
@@ -130,6 +186,24 @@ def make_handler(voice: Voice) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(pcm)))
             self.end_headers()
             self.wfile.write(pcm)
+
+        def _card(self) -> None:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                on = json.loads(self.rfile.read(length) if 0 < length <= 1024 else b"")["on"]
+            except (ValueError, KeyError, TypeError):
+                self._json(400, {"error": 'expected {"on": true or false}'})
+                return
+            if not isinstance(on, bool):
+                self._json(400, {"error": 'expected {"on": true or false}'})
+                return
+            try:
+                with lock:
+                    voice.move(on)  # type: ignore[attr-defined]
+            except Exception as exc:  # e.g. not enough room on the card
+                self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
+                return
+            self._json(200, {"ok": True, "on_card": on, "device": voice.device})
 
         def log_message(self, format: str, *args: Any) -> None:
             return  # never log what was said
@@ -144,9 +218,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--voice", default=None, help="reference recording of the voice to use")
     args = parser.parse_args(argv)
 
-    print(f"Loading the voice model on {args.device}...", flush=True)
-    voice = ChatterboxVoice(args.device, args.voice)
-    voice.speak("Ready.")  # pay the start-up cost now
+    parked = os.environ.get("FRIDAY_VOICE_PARKED") == "1"
+    where = "RAM (parked)" if parked else args.device
+    print(f"Loading the voice model into {where}...", flush=True)
+    voice = ChatterboxVoice(args.device, args.voice, parked=parked)
+    if not parked:
+        voice.move(True)  # pay the start-up cost now
     # 127.0.0.1 only: there is no login, so it must not be reachable from the network.
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(voice))
     print(f"Voice service ready on http://127.0.0.1:{args.port}  (Ctrl+C to stop)", flush=True)

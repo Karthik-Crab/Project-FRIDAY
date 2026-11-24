@@ -31,6 +31,7 @@ from typing import Any, TypeVar
 
 from friday.conversation.delegation import Notice, is_no, is_yes
 from friday.core.errors import FridayError
+from friday.integrations.card import GraphicsCard
 from friday.integrations.comfyui import ComfyClient, ComfyLauncher, fill_workflow, open_file
 from friday.llm.router import ProviderRouter
 
@@ -205,6 +206,7 @@ class StudioDelegate:
         opener: Callable[[Path], None] = open_file,
         music_dir: Path | None = None,
         edit_workflow: Workflow | None = None,
+        card: GraphicsCard | None = None,
     ) -> None:
         self.comfy = comfy
         self.workflows = dict(workflows)
@@ -217,6 +219,10 @@ class StudioDelegate:
         # Card models used now and then (the one that reads pictures): set
         # aside during a job like the others, but not loaded again afterwards.
         self.gpu_occasional = tuple(gpu_occasional)
+        # Who has the graphics card (shared with voice mode in the app).
+        self.card = card or GraphicsCard(router, gpu_providers, gpu_occasional)
+        if self.card.comfy is None:
+            self.card.comfy = comfy
         self.timeout_s = timeout_s
         self.open_results = open_results
         self.on_done = on_done
@@ -415,34 +421,17 @@ class StudioDelegate:
         return f"{thing} I've opened it." if self.open_results else f"{thing} It's saved."
 
     async def _take_card(self) -> list[str]:
-        """Set the graphics-card talking models aside and unload them."""
-        if self.router is None:
-            return []
-        held: list[str] = []
-        for name in (*self.gpu_providers, *self.gpu_occasional):
-            provider = self.router.providers.get(name)
-            if provider is None:
-                continue
-            self.router.hold(name)
-            held.append(name)
-            unload = getattr(provider, "unload", None)
-            if unload is not None:
-                await unload()
-        return held
+        """Clear the graphics card for a job: the expressive voice and the
+        talking models step aside (see ``GraphicsCard``)."""
+        await self.card.begin_job()
+        return ["job"]
 
     async def _give_back(self, held: list[str], *, release_ram: bool = False) -> None:
         with contextlib.suppress(Exception):
             await self.comfy.free(release_ram=release_ram)
-        if self.router is None:
-            return
-        for name in held:
-            self.router.release(name)
-            if name not in self.gpu_providers:
-                continue
-            warm_up = getattr(self.router.providers.get(name), "warm_up", None)
-            if warm_up is not None:  # load it again now, not on the next question
-                with contextlib.suppress(Exception):
-                    await warm_up()
+        if held:
+            held.clear()  # only once per job
+            await self.card.end_job()
 
     async def aclose(self) -> None:
         if self.busy:

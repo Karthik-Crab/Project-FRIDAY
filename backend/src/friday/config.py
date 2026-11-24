@@ -77,6 +77,10 @@ class VoiceSettings(_Strict):
     tts_server_command: list[str] = Field(default_factory=list)
     tts_server_env: dict[str, str] = Field(default_factory=dict)
     tts_server_start_timeout_s: float = Field(default=120.0, ge=5, le=900)
+    # Keep the voice model loaded in RAM (about 3-6 GB) while voice mode is
+    # off: switching on then takes about a second instead of about fifteen.
+    # false = start the service when voice goes on, stop it when it goes off.
+    tts_keep_in_ram: bool = True
 
     @field_validator("tts_server_url")
     @classmethod

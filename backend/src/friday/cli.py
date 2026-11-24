@@ -39,6 +39,7 @@ from friday.llm.factory import build_router
 from friday.llm.router import ProviderRouter
 
 if TYPE_CHECKING:
+    from friday.integrations.card import GraphicsCard
     from friday.integrations.song_ai import SongEditor
     from friday.integrations.vocals import VocalSplitter
 from friday.persona.persona import Channel, Mode, Persona
@@ -108,7 +109,9 @@ def _helper_folders(config: FridayConfig) -> list[Path]:
     return folders
 
 
-def _studio(config: FridayConfig, router: ProviderRouter) -> StudioDelegate | None:
+def _studio(
+    config: FridayConfig, router: ProviderRouter, card: GraphicsCard | None = None
+) -> StudioDelegate | None:
     st = config.studio
     if not st.enabled:
         return None
@@ -170,6 +173,7 @@ def _studio(config: FridayConfig, router: ProviderRouter) -> StudioDelegate | No
         timeout_s=st.job_timeout_s,
         open_results=st.open_results,
         music_dir=music,
+        card=card,
         edit_workflow=Workflow(
             qwen_image_edit(),
             {
@@ -738,10 +742,30 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
     from friday.app.store import ConversationStore
     from friday.app.voice import VoiceMode, real_session_builder
     from friday.integrations.audio_tools import find_ffmpeg
+    from friday.integrations.card import GraphicsCard
     from friday.integrations.voice_service import VoiceServiceLauncher
 
     here = default_config_path().parent
-    studio = _studio(config, router)
+    v = config.voice
+    launcher = None
+    if v.tts_server_url and v.tts_server_command:
+        launcher = VoiceServiceLauncher(
+            v.tts_server_command,
+            v.tts_server_url,
+            env=v.tts_server_env,
+            log_path=here / "voice-service.log",
+            start_timeout_s=v.tts_server_start_timeout_s,
+            start_parked=v.tts_keep_in_ram,
+        )
+    # One owner for the graphics card: voice mode and jobs take turns through it.
+    card = GraphicsCard(
+        router,
+        config.studio.gpu_providers,
+        config.studio.gpu_occasional,
+        voice=launcher,
+        keep_voice_in_ram=v.tts_keep_in_ram,
+    )
+    studio = _studio(config, router, card)
     notes = _notes(config)
     web = _web(config, router)
     services: AppServices | None = None
@@ -778,21 +802,12 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
             web=web,
         )
 
-    v = config.voice
-    launcher = None
-    if v.tts_server_url and v.tts_server_command:
-        launcher = VoiceServiceLauncher(
-            v.tts_server_command,
-            v.tts_server_url,
-            env=v.tts_server_env,
-            log_path=here / "voice-service.log",
-            start_timeout_s=v.tts_server_start_timeout_s,
-        )
     voice = VoiceMode(
         real_session_builder(config, router),
         launcher=launcher,
         router=router,
         gpu_providers=config.studio.gpu_providers,
+        card=card,
     )
     models = _model_list(config, router, studio)
     if config.song_ai.enabled:
@@ -905,6 +920,8 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
             webbrowser.open(url)
         with contextlib.suppress(Exception):
             await _warm_up_local(router, skip=config.studio.gpu_occasional)
+        if voice.card is not None:
+            await voice.card.prepare_voice()  # into RAM, so voice mode starts fast
 
     ready = asyncio.create_task(when_ready())
     # The extra listeners start first so that Ctrl+C reaches the main one,

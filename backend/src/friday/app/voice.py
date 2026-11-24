@@ -1,14 +1,11 @@
 """Voice mode for the chat app: on only while the owner switches it on.
 
-Switching on:
-1. The talking model on the graphics card is unloaded for a moment, so that
-   2. the expressive voice service (about 3 GB) can start, then
-   3. the talking model loads again beside it (partly in RAM; still faster
-      than speech).
-4. The microphone opens and the conversation continues by voice.
+Switching on: the expressive voice moves onto the graphics card (the
+``GraphicsCard`` makes room for it first, and the talking model loads again
+beside it), then the microphone opens and the conversation continues by voice.
 
-Switching off closes the microphone, stops the voice service and reloads the
-talking model, which then has the whole card again.
+Switching off closes the microphone; the voice leaves the card (it waits in
+RAM for next time) and the talking model has the whole card again.
 
 The speech recogniser (Whisper) runs on the processor and stays loaded in RAM
 between switches, so switching on again is quick.
@@ -23,6 +20,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Protocol
 
 from friday.conversation.engine import ConversationEngine
+from friday.integrations.card import GraphicsCard
 from friday.integrations.voice_service import VoiceServiceLauncher
 from friday.llm.router import ProviderRouter
 from friday.persona.persona import Channel
@@ -49,8 +47,10 @@ class VoiceMode:
         router: ProviderRouter | None = None,
         gpu_providers: Sequence[str] = (),
         on_stopped: Callable[[str | None], None] | None = None,
+        card: GraphicsCard | None = None,
     ) -> None:
         self._build = build_session
+        self.card = card  # when set, it decides who has the graphics card
         self.launcher = launcher
         self.router = router
         self.gpu_providers = tuple(gpu_providers)
@@ -80,7 +80,9 @@ class VoiceMode:
                 return
             self.state = "starting"
             try:
-                if self.launcher is not None and not await self.launcher.is_up():
+                if self.card is not None:
+                    await self.card.voice_on()
+                elif self.launcher is not None and not await self.launcher.is_up():
                     await self._unload_card_models()
                     try:
                         await self.launcher.start()
@@ -92,7 +94,10 @@ class VoiceMode:
                     session = await self._build(engine, on_event)
             except BaseException:
                 self.state = "off"
-                if self.launcher is not None:
+                if self.card is not None:
+                    with contextlib.suppress(Exception):
+                        await self.card.voice_off()
+                elif self.launcher is not None:
                     self.launcher.stop()
                 raise
             engine.channel = Channel.VOICE
@@ -131,7 +136,9 @@ class VoiceMode:
             self._engine = None
             self._session = None
             self.conversation_id = None
-            if self.launcher is not None and self.launcher.started_here:
+            if self.card is not None:
+                await self.card.voice_off()
+            elif self.launcher is not None and self.launcher.started_here:
                 self.launcher.stop()
                 # Give the talking model the whole card again.
                 await self._unload_card_models()
@@ -163,6 +170,8 @@ class VoiceMode:
 
     async def aclose(self) -> None:
         await self.stop()
+        if self.card is not None:
+            self.card.stop_voice()
         if self.launcher is not None:
             await self.launcher.aclose()
 

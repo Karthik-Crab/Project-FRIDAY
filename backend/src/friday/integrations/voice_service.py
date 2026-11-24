@@ -1,8 +1,9 @@
-"""Starts and stops the expressive voice service (Chatterbox) on demand.
+"""Starts, parks and stops the expressive voice service (Chatterbox).
 
-The voice service needs about 3 GB of the graphics card. The app starts it
-only while voice mode is on and stops it afterwards, so the talking model and
-picture making have the whole card the rest of the time.
+The voice model needs about 3 GB of the graphics card. With ``start_parked``
+the service loads it into RAM only, and ``to_card`` moves it onto the card
+and back in about half a second (see ``friday.integrations.card``), so the
+talking model and picture making have the whole card the rest of the time.
 
 The command comes from the config file, never from anything said or typed.
 """
@@ -42,6 +43,7 @@ class VoiceServiceLauncher:
         poll_s: float = 1.0,
         client: httpx.AsyncClient | None = None,
         label: str = "the voice service",
+        start_parked: bool = False,
     ) -> None:
         self.label = label
         self.command = [str(Path(part).expanduser()) if "~" in part else part for part in command]
@@ -52,6 +54,8 @@ class VoiceServiceLauncher:
         self._poll_s = poll_s
         self._client = client or httpx.AsyncClient(timeout=3.0)
         self._process: subprocess.Popen[bytes] | None = None
+        if start_parked:  # the server waits in RAM until asked onto the card
+            self.env["FRIDAY_VOICE_PARKED"] = "1"
 
     @property
     def started_here(self) -> bool:
@@ -112,6 +116,22 @@ class VoiceServiceLauncher:
         raise VoiceServiceError(
             f"{self.label} did not start within {self.start_timeout_s:.0f} seconds"
         )
+
+    async def to_card(self, on: bool) -> bool:
+        """Move the voice model onto the graphics card (``on``) or into RAM.
+
+        False when the service can't do that (an older one, already on the
+        card since it started)."""
+        url = self.health_url.removesuffix("/health") + "/card"
+        try:
+            response = await self._client.post(url, json={"on": on}, timeout=60.0)
+        except httpx.HTTPError as exc:
+            raise VoiceServiceError(f"{self.label} didn't answer: {type(exc).__name__}") from exc
+        if response.status_code == 404:
+            return False
+        if response.status_code != 200:
+            raise VoiceServiceError(f"{self.label} couldn't move: {response.text[:200]}")
+        return True
 
     def stop(self) -> None:
         """Stop the service if this app started it, which frees its graphics memory."""

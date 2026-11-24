@@ -180,6 +180,8 @@ lan_port = 8443                  # secure (https) port for home devices; `port` 
 # under [voice] (adjust the paths):
 # tts_server_command = ["~/local-ai/chatterbox-venv/bin/python", "~/local-ai/Project-FRIDAY/backend/servers/chatterbox_server.py", "--device", "cuda", "--port", "5005"]
 # tts_server_env = { HF_HOME = "/mnt/studio/huggingface", HF_HUB_OFFLINE = "1" }
+# tts_keep_in_ram = true         # keep the voice model in RAM (3-6 GB) while voice is off,
+#                                # so voice mode starts in seconds; false = start/stop it
 
 # ---------------------------------------------------------------------------
 # AI changes to songs attached in the chat app: add an instrument part

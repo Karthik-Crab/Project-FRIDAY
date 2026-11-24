@@ -1134,3 +1134,34 @@ with real speakers.
   told to sigh only when something is truly sad or tiring. The marks no longer show
   in the chat, and they are left out of what the AI sees of earlier replies, so it
   stops copying its own habit.
+
+## Sharing the graphics card (2026-11-24)
+
+The card has 8 GB. The chat AI uses about 6 GB, the expressive voice about 3 GB, and
+picture or music jobs want nearly all of it. Before, each feature cleared the card
+its own way, and voice mode ignored the others. Once, voice failed to start because
+ComfyUI was still holding 5.6 GB from an earlier picture.
+
+Now one "card manager" decides who has the card:
+- **Voice on:** ComfyUI lets go, the chat AI and the picture reader step aside,
+  FRIDAY waits until the card really has room, the voice model moves onto the card,
+  and then the chat AI loads again in the space left over.
+- **A picture, music or song job while voice is on:** the voice model steps off the
+  card for the job, and FRIDAY talks in her built-in voice meanwhile. Afterwards the
+  expressive voice comes back.
+- **Voice off:** the voice model leaves the card and the chat AI gets the whole card
+  again.
+
+**Faster voice.** The voice model now waits in RAM between uses (about 3-6 GB of
+your 31 GB). Moving it onto the card takes under a second; starting it from disk took
+about 15. FRIDAY loads it into RAM by herself a moment after she starts.
+`tts_keep_in_ram = false` under `[voice]` goes back to the old way.
+
+**Measured on the PC (2026-11-24):**
+- Voice on in the app: 5.9 s the first time, 3.8 s after that (before: about 25 s).
+- Voice off: about 2 s.
+- A job with voice on: the voice moved off the card (7.2 GB free for the job) and was
+  back 2.2 s after the job.
+
+While parked in RAM, the voice program still keeps about 240 MB on the card, which
+is the cost of having used it once.
