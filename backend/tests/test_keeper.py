@@ -213,7 +213,12 @@ def test_questions_about_the_past_are_recognised() -> None:
         "What did we talk about two days ago?",
     ):
         assert wants_recall(asked), asked
-    for asked in ("What is 2 plus 2?", "Make a picture of a cat", "Did you eat?"):
+    for asked in (
+        "What is 2 plus 2?",
+        "Make a picture of a cat",
+        "Did you eat?",
+        "How long have we known each other?",  # the timeline answers that
+    ):
         assert not wants_recall(asked), asked
 
 
@@ -227,7 +232,7 @@ def test_a_named_day_limits_the_search() -> None:
     found = search("What did we talk about yesterday?", LINES, "Karthik", NOW)
     assert "family movie" in found and "flute" not in found
     nothing = search("Did we talk about cricket?", LINES, "Karthik", NOW)
-    assert "found nothing matching" in nothing and "never guess" in nothing
+    assert "found no lines matching" in nothing and "never guess" in nothing
 
 
 async def test_friday_searches_only_when_asked_about_the_past(tmp_path: Path) -> None:

@@ -20,7 +20,7 @@ SNIPPET = 220
 # Asking about something from before.
 _ASKS = re.compile(
     r"\b(?:remember|recall|forgot|forget|talk(?:ed)?\s+about|told\s+you|tell\s+you|"
-    r"(?:did|have|had)\s+(?:i|we)\b|"
+    r"did\s+(?:i|we)\b|"
     r"i\s+(?:said|asked|mentioned|showed|told)|we\s+(?:said|did|made|discussed|talked|spoke)|"
     r"you\s+(?:said|made|told|did)|last\s+(?:time|week|month|night|chat)|earlier|"
     r"the\s+other\s+day|yesterday|before|previous(?:ly)?|first\s+(?:chat|conversation|time)|"
@@ -119,8 +119,9 @@ def search(
     if not scored:
         where = " from that time" if window else ""
         return (
-            f"A search of the saved past chats{where} found nothing matching "
-            f'"{question.strip()}". Say plainly that you can\'t find it; never guess.'
+            f"A search of the saved past chats{where} found no lines matching "
+            f'"{question.strip()}". If your history and notes above don\'t answer it '
+            "either, say plainly that you can't find it; never guess."
         )
     if keys:
         best = sorted(scored, key=lambda s: (-s[0], -s[1]))[:MAX_HITS]
