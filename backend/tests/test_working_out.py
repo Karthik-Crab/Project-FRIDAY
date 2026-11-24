@@ -42,6 +42,24 @@ def test_questions_about_her_get_the_truth_next_to_them() -> None:
         "Who am I?",
     ):
         assert "Honestly, I only know" in str(truth_note(asked, "K")), asked
+    for asked in (
+        "Will you be able to listen to music and identify the song by searching online?",
+        "Can you listen to this song and tell me what it is?",
+        "Can you create a folder in my desktop?",
+        "Can you set an alarm for 7am?",
+    ):
+        assert "No, I can't do that yet" in str(truth_note(asked, "K")), asked
+    assert "can't touch your computer" in str(truth_note("Do you have access to my PC?", "K"))
+    assert "Answer only from" in str(truth_note("Tell me your capabilities", "K"))
+    for asked in (
+        "Make a flute version of this song",
+        "What song should I make?",
+        "Which song did we make yesterday?",
+        "Make a song",
+    ):
+        assert truth_note(asked, "K") is None, asked
+    assert "saved past chats" in str(truth_note("Do you have anything in your memory?", "K"))
+    assert truth_note("I have great memories of Goa", "K") is None
     for said in ("Can you learn to play chess?", "Did you change the song?", "I miss my mom"):
         assert truth_note(said, "Karthik") is None, said
 

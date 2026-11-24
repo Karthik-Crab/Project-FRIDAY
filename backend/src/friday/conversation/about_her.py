@@ -51,6 +51,58 @@ _NOTES: tuple[tuple[re.Pattern[str], str], ...] = (
         "(things they said or asked for). Then ask them to tell you more. Do not add "
         "traits like thoughtful, kind, curious, funny or patient: they never told you that.",
     ),
+    (
+        re.compile(
+            r"\baccess\s+(?:to\s+)?(?:my|this|the)\s+(?:pc|computer|laptop|machine|system|"
+            r"phone|files|desktop|screen)",
+            re.IGNORECASE,
+        ),
+        'Start your answer with "No, I can\'t touch your computer itself": you cannot '
+        "open, change or look at its files, apps or screen. You only run on it, and "
+        "the app's own picture, music and song tools save what they make.",
+    ),
+    (
+        # Things she plainly can't do: one short instruction works best.
+        re.compile(
+            r"\b(?:(?:identify|recogni[sz]e)\b.{0,40}\b(?:song|music|tune|track)|"
+            r"(?:what|which)\s+(?:song|music|tune|track)\s+(?:is\s+(?:this|that|it|playing)|this\s+is)|"
+            r"(?:song|music|tune|track)\b.{0,40}\b(?:identify|recogni[sz]e|what\s+(?:it|this)\s+is)\b|"
+            r"(?:set|create|make)\s+(?:an?\s+|my\s+)?(?:alarm|reminder|timer)|"
+            r"(?:create|make|delete|move|rename)\s+(?:an?\s+|my\s+|the\s+)?(?:folder|directory)|"
+            r"(?:see|watch|read)\s+my\s+screen|(?:open|launch|close)\s+(?:an?\s+|the\s+)?(?:app|"
+            r"browser|chrome|firefox|program)|send\s+(?:an?\s+)?(?:email|message|text|whatsapp)|"
+            r"(?:make|place)\s+(?:an?\s+)?(?:phone\s+)?call)",
+            re.IGNORECASE,
+        ),
+        "This is something you cannot do. Start your answer with \"No, I can't do that "
+        'yet" and then say in one short sentence what you can do instead. Never offer '
+        "to try, and never say you can do it.",
+    ),
+    (
+        re.compile(
+            r"\b(?:what\s+(?:all\s+|else\s+)?can\s+you\s+do|capabilit\w*|abilit(?:y|ies)|"
+            r"what\s+are\s+you\s+able)",
+            re.IGNORECASE,
+        ),
+        "Answer only from what the text above says you can do (your abilities, the "
+        "app's picture, music, song and file tools, Claude Code if it is set up, the "
+        "notes and past chats). Do not add anything else: you cannot recognise songs, "
+        "set alarms or reminders, send messages, make calls, see the screen, or open "
+        "and control apps.",
+    ),
+    (
+        re.compile(
+            r"\b(?:your\s+(?:memory|memories)|"
+            r"what\s+(?:do\s+)?you\s+remember|do\s+you\s+(?:have|keep|store)\s+(?:any\s+)?"
+            r"(?:memory|memories|notes|history))",
+            re.IGNORECASE,
+        ),
+        "What you really have: the notes {user} asked you to keep (the notes part "
+        "above, if there are any), the saved past chats (the history part above: say "
+        "since when and how many; you can search them when {user} asks about "
+        "something in them), and this chat. Say that briefly. Do not say you have no "
+        "memory, and do not claim to remember more than that.",
+    ),
 )
 
 

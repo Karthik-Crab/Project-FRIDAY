@@ -172,6 +172,12 @@ def without_sounds(text: str) -> str:
     return _SOUND_MARK.sub("", text).strip()
 
 
+def _now() -> str:
+    """The date and time, in both clock styles: the small model misreads 19:50."""
+    now = datetime.now()
+    return f"{now:%A %d %B %Y}, {now:%H:%M} ({now:%I:%M %p}".replace("(0", "(") + ")"
+
+
 def calendar(today: date | None = None) -> str:
     """The week before today and the two after, with their weekdays."""
     today = today or date.today()
@@ -203,7 +209,7 @@ class Persona:
             CORE_IDENTITY.format(
                 user_name=self.user_name,
                 abilities=self._abilities(),
-                now=datetime.now().strftime("%A %d %B %Y, %H:%M"),
+                now=_now(),
                 calendar=calendar(),
             ),
             MODE_OVERLAYS[mode].format(user_name=self.user_name),
