@@ -182,7 +182,7 @@ def test_the_setup_page_serves_the_certificate_and_forwards_to_https(tmp_path: P
     assert x509.load_der_x509_certificate(crt.content).subject.rfc4514_string() == "CN=FRIDAY home"
     moved = phone.get("/api/conversations")
     assert moved.status_code == 308
-    assert moved.headers["location"] == "https://<pc-address>:8443/api/conversations"
+    assert moved.headers["location"] == "https://192.168.1.20:8443/api/conversations"
     assert phone.get("/", headers={"host": "evil.example:8765"}).status_code == 403
     outsider = TestClient(app, base_url="http://192.168.1.20:8765", client=("8.8.8.8", 5000))
     assert outsider.get("/FRIDAY-home.crt").status_code == 403
