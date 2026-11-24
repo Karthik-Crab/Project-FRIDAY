@@ -22,7 +22,7 @@ from typing import Any, Protocol
 from friday.app.store import NEW_TITLE, ConversationStore, StoredMessage
 from friday.conversation.delegation import Notice
 from friday.conversation.engine import ConversationEngine
-from friday.conversation.studio import Kind, Request, StudioDelegate, parse_request
+from friday.conversation.studio import Kind, Request, StudioDelegate, is_chat, parse_request
 from friday.conversation.timeline import timeline
 from friday.core.errors import FridayError
 from friday.core.messages import Role
@@ -480,7 +480,13 @@ class AppServices:
         self._emit_message(self.store.add(cid, "user", "text", text))
         request = parse_request(text) if self.studio else None
         if request is not None and self.studio and request.kind in self.studio.workflows:
-            # Offer it with buttons; nothing starts until the owner presses Make.
+            what = _SPOKEN[request.kind.value]
+            if request.prompt:
+                # Asked for plainly: start now (the card has a Cancel button).
+                self.make(cid, request.kind.value, request.prompt, said=True)
+                self._remember(cid, text, f"(started making the {what}: {request.prompt})")
+                return cid
+            # "Make a song": the card asks what it should be.
             offer = self.store.add(
                 cid,
                 "assistant",
@@ -489,7 +495,7 @@ class AppServices:
                 meta={"kind": request.kind.value, "status": "pending"},
             )
             self._emit_message(offer)
-            self._remember(cid, text, f"(offered to make the {_SPOKEN[request.kind.value]})")
+            self._remember(cid, text, f"(offered to make the {what})")
             return cid
         await self._stream_reply(cid, text, think=think)
         return cid
@@ -653,8 +659,12 @@ class AppServices:
         kind: str,
         prompt: str,
         proposal_id: int | None = None,
+        *,
+        said: bool = False,
     ) -> int:
-        """Start making a picture or music. Returns the job's message id."""
+        """Start making a picture or music. Returns the job's message id.
+
+        ``said``: the owner's message is in the chat already."""
         studio = self.studio
         prompt = " ".join(prompt.split())
         if studio is None or Kind(kind) not in studio.workflows:
@@ -672,7 +682,7 @@ class AppServices:
                 self.store.update(proposal_id, content=prompt, meta={"status": "accepted"}),
                 "message_update",
             )
-        else:
+        elif not said:
             self._title_from(cid, prompt)
             self._emit_message(self.store.add(cid, "user", "text", prompt, meta={"make": kind}))
         job = self.store.add(
@@ -958,6 +968,11 @@ class AppServices:
             if done.meta.get("status") == "done"
             else "(the picture could not be changed)",
         )
+
+    @staticmethod
+    def is_talk(text: str) -> bool:
+        """Typed on the Picture or Music tab, but plainly talk ("Do you remember me?")."""
+        return is_chat(text)
 
     def wants_song_change(self, conversation_id: str | None, text: str) -> bool:
         """A request typed on the Music tab that is really about the song already

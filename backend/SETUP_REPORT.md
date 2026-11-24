@@ -1189,5 +1189,16 @@ but don't remove. Saying "remember that ..." is still the way to make her keep
 something for good.
 
 Note: the "Do you remember me?" picture job that day happened because the
-**Picture** tab was still selected under the message box; FRIDAY read it as a
-picture description. Switch back to **Chat** after making pictures.
+**Picture** tab was still selected under the message box. Fixed the same day:
+see below.
+
+## Pictures from the Chat tab (2026-11-24)
+
+- In **Chat**, asking plainly ("make a picture of a fox", "I want an image of a
+  castle", or just "picture of a cat in space") starts the picture at once. The
+  card has a **Cancel** button. Only "make a picture" with nothing about what
+  it should show still asks first.
+- On the **Picture** or **Music** tab, a question or greeting such as "Do you
+  remember me?" is answered as chat instead of being drawn.
+- After you send from the Picture or Music tab, the box goes back to **Chat**
+  by itself.

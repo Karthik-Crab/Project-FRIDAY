@@ -63,22 +63,28 @@ _ARTICLE = rf"(?:(?:me|us){_SEP})?(?:(?:a|an|the|some|another|one|new|nice){_SEP
 # ("a story about music").
 _NOT_STYLE = r"of|about|for|with|on|to|in|from|showing|that|and"
 _STYLE = rf"(?P<style>(?:(?!(?:{_NOT_STYLE})\b)[\w'&-]+{_SEP}){{0,4}}?)"
-_IMAGE_VERBS = r"make|generate|create|draw|paint|render|design|produce|imagine|show"
+# "I want a picture of ...", "give me a song about ...": wanting one is asking.
+_WANT = r"i(?:{_SEP}|')(?:want|need|d{_SEP}like|would{_SEP}like)|give|get"
+_IMAGE_VERBS = r"make|generate|create|draw|paint|render|design|produce|imagine|show|" + _WANT
 _IMAGE_NOUNS = (
     r"images?|pictures?|pics?|photos?|photographs?|drawings?|paintings?|illustrations?|"
     r"artworks?|art|wallpapers?|portraits?|sketch(?:es)?|posters?|logos?|renders?"
 )
-_MUSIC_VERBS = r"make|generate|create|compose|write|produce"
+_MUSIC_VERBS = r"make|generate|create|compose|write|produce|" + _WANT
 _MUSIC_NOUNS = (
     r"songs?|music|tracks?|tunes?|melod(?:y|ies)|beats?|jingles?|soundtracks?|"
     r"instrumentals?|lullab(?:y|ies)|anthems?|ballads?|raps?"
 )
-_IMAGE_LINK = r"of|showing|depicting|with|for|about|where|that{_SEP}shows?"
+_IMAGE_LINK = (
+    r"for{_SEP}(?:me|us){_SEP}(?:of|showing|with)|"
+    r"of|showing|depicting|with|for|about|where|that{_SEP}shows?"
+)
 _MUSIC_LINK = r"about|of|for|with|that|like|where|in{_SEP}the{_SEP}style{_SEP}of"
 
 
 def _request(verbs: str, nouns: str, links: str) -> re.Pattern[str]:
     links = links.replace("{_SEP}", _SEP)
+    verbs = verbs.replace("{_SEP}", _SEP)
     return re.compile(
         rf"{_LEAD}(?:{verbs}){_SEP}{_ARTICLE}{_STYLE}(?P<noun>{nouns})(?=$|{_SEP})"
         rf"(?:{_SEP}(?P<link>{links})\b)?(?:{_SEP}(?P<subject>\S.*?))?\W*$",
@@ -97,6 +103,12 @@ _NOT_DRAWING = (
 _DRAW = re.compile(
     rf"{_LEAD}(?:draw|paint|sketch){_SEP}(?:(?:me|us){_SEP})?(?!(?:{_NOT_DRAWING})\b)"
     rf"(?P<subject>\S.*?)\W*$",
+    re.IGNORECASE | re.DOTALL,
+)
+# Just "a picture of a cat in space": the whole message names what to make.
+_BARE_IMAGE = re.compile(
+    rf"^\W*(?:(?:a|an){_SEP})?(?:pictures?|images?|photos?|drawings?|paintings?)"
+    rf"{_SEP}of{_SEP}(?P<subject>\S.*?)\W*$",
     re.IGNORECASE | re.DOTALL,
 )
 _ANY_NOUN = rf"(?:{_IMAGE_NOUNS}|{_MUSIC_NOUNS}|photo|drawing|song)"
@@ -164,10 +176,38 @@ def _parse_sentence(text: str) -> Request | None:
         else:
             prompt = ""  # "generate music": ask what kind
         return Request(kind, re.sub(r"\s+", " ", prompt).strip(" ,.:;!?-"))
-    match = _DRAW.match(text)
+    match = _DRAW.match(text) or _BARE_IMAGE.match(text)
     if match:
         return Request(Kind.IMAGE, match.group("subject").strip(" ,.:;!?-"))
     return None
+
+
+# Said on the Picture or Music tab, but plainly talk: "Do you remember me?",
+# "hi", "thanks". Descriptions of a picture don't end in a question mark.
+_QUESTION_START = (
+    r"do|does|did|are|is|was|were|am|what|who|whom|whose|why|how|when|where|which|"
+    r"have|has|had|will|would|should|could|can|may|shall"
+)
+_CHAT = re.compile(
+    rf"^\W*(?:(?:friday|hey|ok(?:ay)?|so|wait|and|but){_SEP})*(?:"
+    rf"(?:{_QUESTION_START})\b.*\?\W*"
+    rf"|(?:hi|hello|hey|thanks?|thank{_SEP}you|ok(?:ay)?|yes|no|bye|good{_SEP}(?:morning|night|evening))"
+    rf"(?:{_SEP}friday)?\W*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+_MAKING = re.compile(
+    r"\b(?:make|generate|create|draw|paint|sketch|render|design|produce|imagine|compose)\b",
+    re.IGNORECASE,
+)
+
+
+def is_chat(text: str) -> bool:
+    """Is this plainly talk, not a description of something to make?"""
+    if parse_request(text) is not None or _MAKING.search(text):
+        return False  # "Can you make a dragon?" on the Picture tab: make it
+    return bool(_CHAT.match(text.strip()))
 
 
 def is_studio_command(text: str) -> bool:

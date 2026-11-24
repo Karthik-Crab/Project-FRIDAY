@@ -164,52 +164,61 @@ def test_rename_and_delete(tmp_path: Path) -> None:
 # Pictures and music
 
 
-def test_picture_request_is_offered_then_made(tmp_path: Path) -> None:
+def test_a_picture_asked_for_in_chat_starts_straight_away(tmp_path: Path) -> None:
     comfy = FakeComfy()
     services, model = _services(tmp_path, comfy=comfy)
     with _client(services) as client, client.websocket_connect("/ws", headers=HOST) as ws:
         ws.send_json({"type": "chat", "text": "Hi! Can you make a picture of a fox in the snow?"})
-        offer = _until(ws, "message", lambda e: e["message"]["kind"] == "proposal")["message"]
-        assert offer["content"] == "a fox in the snow"
-        assert offer["meta"] == {"kind": "image", "status": "pending"}
-        assert model.requests == [] and comfy.queued == []  # nothing until the button
-
-        ws.send_json(
-            {
-                "type": "make",
-                "conversation_id": offer["conversation_id"],
-                "kind": "image",
-                "prompt": "a red fox in deep snow",
-                "proposal_id": offer["id"],
-                "request_id": 7,
-            }
-        )
-        accepted = _until(ws, "message_update", lambda e: e["message"]["id"] == offer["id"])
-        assert accepted["message"]["meta"]["status"] == "accepted"
         job = _until(ws, "message", lambda e: e["message"]["kind"] == "job")["message"]
+        assert job["content"] == "a fox in the snow"
         done = _until(
             ws,
             "message_update",
             lambda e: e["message"]["id"] == job["id"] and e["message"]["meta"]["status"] == "done",
         )["message"]
-        assert done["file_name"]
-        assert comfy.queued[0]["6"]["inputs"]["text"] == "a red fox in deep snow"
+        assert done["file_name"] and model.requests == []
+        assert comfy.queued[0]["6"]["inputs"]["text"] == "a fox in the snow"
         picture = client.get(f"/files/{job['id']}")
         assert picture.status_code == 200 and picture.content.startswith(b"\x89PNG")
         assert client.get("/files/99999").status_code == 404
+        messages = client.get(f"/api/conversations/{job['conversation_id']}").json()["messages"]
+        assert [m["kind"] for m in messages].count("text") == 1  # the request, shown once
 
-        # The same offer cannot be used twice.
-        ws.send_json(
-            {
-                "type": "make",
-                "conversation_id": offer["conversation_id"],
-                "kind": "image",
-                "prompt": "again",
-                "proposal_id": offer["id"],
-                "request_id": 8,
-            }
-        )
+
+def test_a_picture_without_a_subject_is_offered_first(tmp_path: Path) -> None:
+    comfy = FakeComfy()
+    services, _ = _services(tmp_path, comfy=comfy)
+    with _client(services) as client, client.websocket_connect("/ws", headers=HOST) as ws:
+        ws.send_json({"type": "chat", "text": "Can you make a picture?"})
+        offer = _until(ws, "message", lambda e: e["message"]["kind"] == "proposal")["message"]
+        assert offer["meta"] == {"kind": "image", "status": "pending"} and comfy.queued == []
+        ask = {
+            "type": "make",
+            "conversation_id": offer["conversation_id"],
+            "kind": "image",
+            "prompt": "a red fox in deep snow",
+            "proposal_id": offer["id"],
+            "request_id": 7,
+        }
+        ws.send_json(ask)
+        accepted = _until(ws, "message_update", lambda e: e["message"]["id"] == offer["id"])
+        assert accepted["message"]["meta"]["status"] == "accepted"
+        _until(ws, "message", lambda e: e["message"]["kind"] == "job")
+        ws.send_json({**ask, "prompt": "again", "request_id": 8})
         assert "already answered" in _until(ws, "error")["message"]
+
+
+def test_talk_typed_on_the_picture_tab_is_answered_not_drawn(tmp_path: Path) -> None:
+    comfy = FakeComfy()
+    services, model = _services(tmp_path, comfy=comfy)
+    with _client(services) as client, client.websocket_connect("/ws", headers=HOST) as ws:
+        ws.send_json(
+            {"type": "make", "kind": "image", "prompt": "Do you remember me?", "request_id": 1}
+        )
+        cid = _until(ws, "reply")["conversation_id"]
+        messages = client.get(f"/api/conversations/{cid}").json()["messages"]
+        assert [m["kind"] for m in messages] == ["text", "text"]
+        assert comfy.queued == [] and len(model.requests) == 1
 
 
 def test_picture_mode_makes_straight_away_and_can_be_cancelled(tmp_path: Path) -> None:

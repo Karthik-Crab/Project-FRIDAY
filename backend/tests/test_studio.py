@@ -619,3 +619,29 @@ async def test_ways_of_dropping_a_read_back(tmp_path: Path, answer: str) -> None
     studio, _, _ = _studio(FakeComfy(), tmp_path)
     studio.handle("make a picture of a cat")
     assert studio.handle(answer) == "Okay, I won't make it."
+
+
+def test_wanting_a_picture_is_asking_for_one() -> None:
+    from friday.conversation.studio import parse_request
+
+    cases = {
+        "I want a picture of a dog on the beach": "a dog on the beach",
+        "I need an image of a castle": "a castle",
+        "picture of a cat in space": "a cat in space",
+        "Can you create an image for me of a forest?": "a forest",
+        "give me a wallpaper of mountains": "mountains",
+    }
+    for said, prompt in cases.items():
+        assert parse_request(said) == Request(Kind.IMAGE, prompt), said
+    assert parse_request("I'd like a song about rain") == Request(Kind.MUSIC, "song about rain")
+    for talk in ("I want you to tell me a story", "I need help", "I'd like to know the time"):
+        assert parse_request(talk) is None, talk
+
+
+def test_talk_on_the_picture_tab_is_recognised() -> None:
+    from friday.conversation.studio import is_chat
+
+    for talk in ("Do you remember me?", "hi", "Hey Friday", "thanks", "Okay, so who are you?"):
+        assert is_chat(talk), talk
+    for picture in ("a cat in space", "Can you make a dragon?", "How about a red car", "sunset"):
+        assert not is_chat(picture), picture

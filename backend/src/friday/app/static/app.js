@@ -552,6 +552,9 @@ async function submit(text) {
       }
       reply = await sendWithConversation({ type: "chat", text, files: files.map((a) => a.id), think });
     } else {
+      // One picture or song per press: the next message is ordinary chat again
+      // (in Chat, "make a picture of ..." still works).
+      setMode("chat");
       reply = await sendWithConversation({ type: "make", kind: mode, prompt: text });
     }
     return reply;
