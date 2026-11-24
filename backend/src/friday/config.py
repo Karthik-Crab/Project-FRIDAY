@@ -154,6 +154,16 @@ class MemorySettings(_Strict):
     also_read: list[str] = Field(default_factory=list)
     # Pass the notes to Claude Code along with a task.
     share_with_claude_code: bool = True
+    # Find past chat lines by meaning too ("my vehicle" finds "my car"), with
+    # a small Ollama model on the processor. "" = by matching words only.
+    meaning_model: str = "qwen3-embedding:0.6b"
+    # Ollama has no login, so it must be on this machine.
+    meaning_url: str = "http://127.0.0.1:11434"
+
+    @field_validator("meaning_url")
+    @classmethod
+    def _local_meaning(cls, value: str) -> str:
+        return _this_machine_only("memory.meaning_url", value)
 
 
 def _this_machine_only(name: str, value: str) -> str:

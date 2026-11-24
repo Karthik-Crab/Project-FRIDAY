@@ -34,6 +34,7 @@ from friday.core.errors import ConfigError, FridayError
 from friday.core.logging import configure_logging
 from friday.core.messages import ChatRequest
 from friday.core.secrets import KeyringEnvSecretStore
+from friday.integrations.meaning import Meanings
 from friday.integrations.web import WebSearch
 from friday.llm.factory import build_router
 from friday.llm.router import ProviderRouter
@@ -59,6 +60,14 @@ def _notes(config: FridayConfig) -> NoteBook | None:
         also_read=tuple(Path(p).expanduser() for p in memory.also_read),
         share=memory.share_with_claude_code,
     )
+
+
+def _meanings(config: FridayConfig) -> Meanings | None:
+    """The small model that finds past chat lines by meaning (on the processor)."""
+    memory = config.memory
+    if not memory.enabled or not memory.meaning_model:
+        return None
+    return Meanings(memory.meaning_model, memory.meaning_url)
 
 
 def _asker(router: ProviderRouter) -> Callable[[ChatRequest], Awaitable[str]]:
@@ -860,6 +869,7 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
         voice_audio=config.voice.audio,
         notes=_notes(config),
         ask=_asker(router),
+        meanings=_meanings(config),
     )
     port = config.app.port
     from friday.app.lan import HomeAccess, addresses

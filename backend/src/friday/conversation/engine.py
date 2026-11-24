@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator, Callable, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -123,7 +123,7 @@ class ConversationEngine:
         # FRIDAY's real history with the owner, worked out fresh for each reply.
         self.timeline: Callable[[], str | None] | None = None
         # Searches past chats when asked about them ("what did we say yesterday?").
-        self.recall: Callable[[str], str | None] | None = None
+        self.recall: Callable[[str], Awaitable[str | None]] | None = None
         self.studio = studio
         # An incognito chat: nothing goes into the memory file, and no task goes
         # to Claude Code (it keeps its own record of every task).
@@ -288,7 +288,7 @@ class ConversationEngine:
             web_note = await self._look_up(user_text, turn) or NO_SEARCH_NOTE
         if self.recall is not None and not images and wants_recall(user_text):
             try:
-                found = self.recall(user_text)
+                found = await self.recall(user_text)
             except Exception:
                 log.warning("could not search past chats", exc_info=True)
                 found = None

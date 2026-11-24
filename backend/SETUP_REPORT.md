@@ -1242,3 +1242,32 @@ about the car she quoted your line word for word.
 Limits: the summaries come from the small local model, so they are plain and
 sometimes miss a detail. A search finds words, not meaning ("the bike" will
 not find "my motorcycle").
+
+## Past chats found by meaning (2026-11-24)
+
+Searching past chats used to need the same words: "motorcycle" would not
+find "wash my bike". Now a small extra model, **qwen3-embedding 0.6B**
+(640 MB, in Ollama on the studio drive), works out what each saved line
+means. It runs on the processor, so it never takes the graphics card from
+voice or pictures. When you ask about the past, only the subject of the
+question is compared ("motorcycle", not "do you remember what I said
+about my ...").
+
+* New lines are worked out in the background while FRIDAY is idle. Your 187
+  saved lines took 12 seconds once; after that each question takes about
+  0.05 seconds.
+* Settings in `[memory]`: `meaning_model = "qwen3-embedding:0.6b"` (set
+  `""` to search by words only) and `meaning_url` (this machine only). If
+  Ollama doesn't have the model, FRIDAY says so in the log and searches by
+  words.
+* The meanings are kept in `conversations.db` (table `meanings`) and are
+  deleted with their chat. Incognito chats are left out.
+
+I compared three such models on your chats; qwen3-embedding was the only one
+that put the right line first for "the guy from the video game" (Kratos)
+and "that sad old tamil song". The other two (nomic-embed-text,
+mxbai-embed-large) were downloaded only for the test and removed again.
+
+One thing I learned in the test: if FRIDAY makes something up early in a
+chat, she tends to build on it in later answers in that chat. Asked in a
+fresh chat, the same questions were answered correctly.

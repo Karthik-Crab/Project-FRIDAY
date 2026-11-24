@@ -240,3 +240,73 @@ async def test_friday_searches_only_when_asked_about_the_past(tmp_path: Path) ->
     assert "flute version of this song" in model.requests[-1].system  # type: ignore[attr-defined]
     [_ async for _ in engine.respond("What is 2 plus 2?")]
     assert "Lines found by searching" not in model.requests[-1].system  # type: ignore[attr-defined]
+
+
+# Finding past lines by meaning
+
+
+class FakeMeanings:
+    """Lines about cars and vehicles point one way, everything else another."""
+
+    model, close = "fake-embed", 0.5
+
+    def __init__(self) -> None:
+        self.fail = False
+
+    @staticmethod
+    def _vector(text: str) -> Any:
+        import numpy as np
+
+        about_cars = any(w in text.lower() for w in ("car", "vehicle", "service", "automobile"))
+        return np.array([1.0, 0.0] if about_cars else [0.0, 1.0], dtype=np.float32)
+
+    async def lines(self, texts: list[str]) -> Any:
+        import numpy as np
+
+        if self.fail:
+            raise ConnectionError("ollama is not running")
+        return np.stack([self._vector(t) for t in texts])
+
+    async def question(self, text: str) -> Any:
+        return self._vector(text)
+
+
+def test_meaning_counts_as_a_match_without_shared_words() -> None:
+    found = search(
+        "Do you remember my vehicle maintenance?", LINES, "Karthik", NOW, [0.2, 0.1, 0.9, 0.3], 0.5
+    )
+    assert "what is 2 plus 2" in found and "flute" not in found
+
+
+async def test_saved_lines_get_a_meaning_while_idle_and_are_found_by_it(tmp_path: Path) -> None:
+    services, _ = _app(tmp_path, {"summary": "", "facts": []})
+    services.meanings = FakeMeanings()  # type: ignore[assignment]
+    chat = services.store.create()
+    car = services.store.add(chat.id, "user", "text", "I need to give my car for service")
+    services.store.add(chat.id, "user", "text", "make a flute song")
+    secret = services.store.create(incognito=True)
+    services.store.add(secret.id, "user", "text", "my car is secret")
+    assert await services.mean_some() == 2  # never the incognito chat
+    assert await services.mean_some() == 0
+    services.store.update(car.id, content="I need to give my vehicle for service")
+    assert services.store.without_meaning("fake-embed") == [
+        (car.id, car.content.replace("car", "vehicle"))
+    ]
+    await services.mean_some()
+
+    now = services.store.create()
+    found = await services._recall("Do you remember my automobile upkeep?", now.id, "Karthik")
+    assert "give my vehicle for service" in found and "flute" not in found
+    services.store.delete(chat.id)
+    assert services.store.meanings("fake-embed") == {}
+
+
+async def test_without_the_meaning_model_the_search_uses_words(tmp_path: Path) -> None:
+    services, _ = _app(tmp_path, {"summary": "", "facts": []})
+    meanings = FakeMeanings()
+    meanings.fail = True
+    services.meanings = meanings  # type: ignore[assignment]
+    _saved_chat(services)
+    assert await services.mean_some() == 0 and services.meanings is None
+    now = services.store.create()
+    assert "flute version" in await services._recall("remember the flute?", now.id, "Karthik")

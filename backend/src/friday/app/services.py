@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+import numpy as np
+
 from friday.app.store import NEW_TITLE, ConversationStore, StoredMessage
 from friday.conversation import keeper, recall
 from friday.conversation.delegation import Notice
@@ -38,6 +40,7 @@ from friday.integrations.audio_tools import (
     parse_audio_edit,
     wants_new_part,
 )
+from friday.integrations.meaning import Meanings
 from friday.integrations.song_ai import SongEditor, SongTask, parse_song_task
 from friday.integrations.song_ai import output_path as song_output_path
 from friday.integrations.vocals import VocalSplitter, parse_vocal_task
@@ -146,6 +149,7 @@ class AppServices:
         voice_audio: str = "device",
         notes: NoteBook | None = None,
         ask: Callable[[ChatRequest], Awaitable[str]] | None = None,
+        meanings: Meanings | None = None,
     ) -> None:
         self.store = store
         # The memory file, and the talking model for chat summaries and
@@ -154,6 +158,8 @@ class AppServices:
         self._ask = ask
         self._keeper: asyncio.Task[None] | None = None
         self._keep_failed: set[str] = set()
+        # Finding past chat lines by meaning (None or after a failure: by words).
+        self.meanings = meanings
         # "browser": voice mode uses the microphone and speaker of the page that
         # switched it on; "device": this PC's own.
         self.voice_audio_kind = voice_audio
@@ -332,13 +338,8 @@ class AppServices:
             engine.timeline = lambda: timeline(
                 self.store.overview(), conversation_id, engine.persona.user_name
             )
-            engine.recall = lambda question: recall.search(
-                question,
-                [
-                    recall.Line(m.conversation_id, m.role, m.content, m.created)
-                    for m in self.store.search_messages(exclude=conversation_id)
-                ],
-                engine.persona.user_name,
+            engine.recall = lambda question: self._recall(
+                question, conversation_id, engine.persona.user_name
             )
             engine.incognito = self.is_incognito(conversation_id)
             _load_history(engine, self.store.messages(conversation_id), self._history_text)
@@ -1232,7 +1233,7 @@ class AppServices:
 
     def start_keeper(self, idle_s: float = 600, every_s: float = 60) -> None:
         """Summarise chats that went quiet and suggest notes, in the background."""
-        if self._ask is None or self._keeper is not None:
+        if (self._ask is None and self.meanings is None) or self._keeper is not None:
             return
 
         async def loop() -> None:
@@ -1242,6 +1243,7 @@ class AppServices:
                     await self.keep_one(idle_s)
                 except Exception:
                     log.warning("could not summarise a chat", exc_info=True)
+                await self.mean_some()
 
         self._keeper = asyncio.get_running_loop().create_task(loop())
 
@@ -1288,6 +1290,51 @@ class AppServices:
         if kept.facts:
             self.emit({"type": "suggestions", "items": self.suggestions()})
         return cid
+
+    async def mean_some(self, limit: int = 64) -> int:
+        """Work out the meaning of saved lines that don't have one yet (while idle)."""
+        if self.meanings is None or self._busy:
+            return 0
+        model = self.meanings.model
+        waiting = self.store.without_meaning(model, limit)
+        if not waiting:
+            return 0
+        try:
+            vectors = await self.meanings.lines([text for _, text in waiting])
+        except Exception as exc:
+            log.warning("meaning search is off: %s (ollama pull %s?)", exc, model)
+            self.meanings = None  # words only, until FRIDAY restarts
+            return 0
+        self.store.set_meanings(
+            model,
+            [
+                (i, v.astype(np.float32).tobytes())
+                for (i, _), v in zip(waiting, vectors, strict=True)
+            ],
+        )
+        return len(waiting)
+
+    async def _recall(self, question: str, exclude: str, user: str) -> str:
+        """Search the saved chats (not this one) for what the question asks about."""
+        found = self.store.search_messages(exclude=exclude)
+        lines = [recall.Line(m.conversation_id, m.role, m.content, m.created) for m in found]
+        closeness: list[float] = []
+        close = 1.0
+        subject = recall.topic(question)
+        if self.meanings is not None and subject:
+            try:
+                asked = await self.meanings.question(subject)
+                known = self.store.meanings(self.meanings.model)
+                close = self.meanings.close
+                closeness = [
+                    float(np.frombuffer(known[m.id], dtype=np.float32) @ asked)
+                    if m.id in known
+                    else 0.0
+                    for m in found
+                ]
+            except Exception as exc:
+                log.warning("searching by meaning failed, by words only: %s", exc)
+        return recall.search(question, lines, user, closeness=closeness, close=close)
 
     def suggestions(self) -> list[dict[str, Any]]:
         return self.store.suggestions() if self.notes is not None else []

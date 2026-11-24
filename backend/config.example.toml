@@ -123,6 +123,8 @@ folder = ""                      # "" = a "memory" folder next to this file
 max_chars = 1200                 # how much she is shown; more makes her slower to start
 also_read = []                   # other files to show her, e.g. ["C:/Users/you/Projects/app/CLAUDE.md"]
 share_with_claude_code = true    # pass the notes to Claude Code along with a task
+meaning_model = "qwen3-embedding:0.6b"  # find past chats by meaning ("ollama pull" it); "" = words only
+meaning_url = "http://127.0.0.1:11434"
 
 # ---- studio: optional, make pictures and music with ComfyUI ---------------
 # "Friday, make a picture of ..." or "compose a song about ..." -> she reads

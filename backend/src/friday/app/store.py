@@ -17,6 +17,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,11 @@ CREATE TABLE IF NOT EXISTS summaries (
     conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
     summary TEXT NOT NULL,
     upto INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS meanings (
+    message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    vector BLOB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS suggestions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -190,6 +196,9 @@ class ConversationStore:
         if kind is not None:
             current.kind = kind
         if content is not None:
+            if content != current.content:
+                with self._lock, self._db:  # its meaning is worked out again
+                    self._db.execute("DELETE FROM meanings WHERE message_id = ?", (message_id,))
             current.content = content
         if file is not None:
             current.file = file
@@ -325,6 +334,38 @@ class ConversationStore:
                 (exclude or "",),
             ).fetchall()
         return [_message(r) for r in rows]
+
+    def without_meaning(self, model: str, limit: int = 64) -> list[tuple[int, str]]:
+        """Saved text messages whose meaning hasn't been worked out with ``model``."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT m.id, m.content FROM messages m"
+                " JOIN conversations c ON c.id = m.conversation_id"
+                " LEFT JOIN meanings x ON x.message_id = m.id AND x.model = ?"
+                " WHERE c.incognito = 0 AND m.kind = 'text' AND TRIM(m.content) != ''"
+                " AND x.message_id IS NULL ORDER BY m.id LIMIT ?",
+                (model, limit),
+            ).fetchall()
+        return [(r["id"], r["content"]) for r in rows]
+
+    def set_meanings(self, model: str, items: Sequence[tuple[int, bytes]]) -> None:
+        with self._lock, self._db:
+            self._db.executemany(
+                "INSERT OR REPLACE INTO meanings (message_id, model, vector) VALUES (?, ?, ?)",
+                [(i, model, v) for i, v in items],
+            )
+
+    def meanings(self, model: str) -> dict[int, bytes]:
+        """Message id -> its meaning, for the saved chats."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT x.message_id, x.vector FROM meanings x"
+                " JOIN messages m ON m.id = x.message_id"
+                " JOIN conversations c ON c.id = m.conversation_id"
+                " WHERE x.model = ? AND c.incognito = 0",
+                (model,),
+            ).fetchall()
+        return {r["message_id"]: r["vector"] for r in rows}
 
     def unfinished_jobs(self) -> list[StoredMessage]:
         """Jobs that were still going when the app last stopped."""

@@ -77,20 +77,43 @@ def _keys(text: str) -> set[str]:
     return {stem(w) for w in words if w not in _ABOUT_ASKING and len(w) > 2}
 
 
+def topic(question: str) -> str:
+    """What the question is about, without the asking ("do you remember ...")."""
+    words = re.findall(r"[A-Za-z0-9']+", question)
+    return " ".join(w for w in words if w.lower() not in _ABOUT_ASKING and len(w) > 2)
+
+
 def _snippet(text: str) -> str:
     text = " ".join(text.split())
     return text if len(text) <= SNIPPET else text[: SNIPPET - 3] + "..."
 
 
-def search(question: str, lines: Sequence[Line], user: str, now: datetime | None = None) -> str:
-    """What FRIDAY is told: the matching lines from past chats, or that none matched."""
+def search(
+    question: str,
+    lines: Sequence[Line],
+    user: str,
+    now: datetime | None = None,
+    closeness: Sequence[float] = (),
+    close: float = 1.0,
+) -> str:
+    """What FRIDAY is told: the matching lines from past chats, or that none matched.
+
+    ``closeness`` (one number per line, if the meaning model is on) says how
+    alike each line is to the question; lines at or above ``close`` count as
+    matches even without a shared word."""
     now = now or datetime.now()
     window = _window(question, now)
     keys = _keys(question)
-    pool = [x for x in lines if window is None or window[0] <= x.created < window[1]]
-    scored: list[tuple[int, int, Line]] = []
-    for index, line in enumerate(pool):
-        score = len(keys & {stem(w) for w in re.findall(r"[a-z0-9']+", line.content.lower())})
+    scored: list[tuple[float, int, Line]] = []
+    for index, line in enumerate(lines):
+        if window is not None and not window[0] <= line.created < window[1]:
+            continue
+        score: float = len(
+            keys & {stem(w) for w in re.findall(r"[a-z0-9']+", line.content.lower())}
+        )
+        alike = closeness[index] if index < len(closeness) else 0.0
+        if alike >= close:
+            score += 2 + 10 * (alike - close)  # a close meaning counts like two words or more
         if score or (window is not None and not keys):
             scored.append((score, index, line))
     if not scored:
