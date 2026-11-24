@@ -1165,3 +1165,29 @@ about 15. FRIDAY loads it into RAM by herself a moment after she starts.
 
 While parked in RAM, the voice program still keeps about 240 MB on the card, which
 is the cost of having used it once.
+
+## FRIDAY's sense of time (2026-11-24)
+
+In the chat on 24 November, FRIDAY made things up: that she had helped "many
+people", that she had known you "a few months", that she remembered your first
+chat (she quoted today's), and that she fine-tunes herself. She simply had no
+record to go on, so she filled the gaps.
+
+Now, every time she answers, she is given:
+- today's date and time (even when web search is off);
+- when you first talked, how many chats you have had and on how many days,
+  when the last one was, and how each recent chat began (incognito chats are
+  never included);
+- plain rules: only you use her, she has never helped anyone else, the AI
+  model doesn't learn or grow from chatting, and she doesn't describe your
+  personality unless you told her.
+
+Asked the same questions on the real model, she now gives the right dates and
+first chat, and says she has only helped you. She still sometimes says she is
+"learning from our chats": a habit of this small model that the rules reduce
+but don't remove. Saying "remember that ..." is still the way to make her keep
+something for good.
+
+Note: the "Do you remember me?" picture job that day happened because the
+**Picture** tab was still selected under the message box; FRIDAY read it as a
+picture description. Switch back to **Chat** after making pictures.

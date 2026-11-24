@@ -21,6 +21,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from friday.conversation.timeline import ChatSummary
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
@@ -41,6 +43,7 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages(conversation_id, id);
 """
+
 
 NEW_TITLE = "New chat"
 
@@ -202,6 +205,28 @@ class ConversationStore:
                 "SELECT * FROM messages WHERE conversation_id = ? ORDER BY id", (conversation_id,)
             ).fetchall()
         return [_message(r) for r in rows]
+
+    def overview(self, opening: int = 2) -> list[ChatSummary]:
+        """Every saved (not incognito) chat: when, how long, how it began."""
+        with self._lock:
+            chats = self._db.execute(
+                "SELECT c.id, c.created, c.updated, COUNT(m.id) AS n FROM conversations c"
+                " JOIN messages m ON m.conversation_id = c.id"
+                " WHERE c.incognito = 0 GROUP BY c.id ORDER BY c.created"
+            ).fetchall()
+            said: dict[str, list[str]] = {}
+            for row in self._db.execute(
+                "SELECT m.conversation_id, m.content FROM messages m"
+                " JOIN conversations c ON c.id = m.conversation_id"
+                " WHERE c.incognito = 0 AND m.role = 'user' AND m.kind = 'text' ORDER BY m.id"
+            ):
+                first = said.setdefault(row[0], [])
+                if len(first) < opening and row[1].strip():
+                    first.append(row[1])
+        return [
+            ChatSummary(r["id"], r["created"], r["updated"], r["n"], tuple(said.get(r["id"], ())))
+            for r in chats
+        ]
 
     def unfinished_jobs(self) -> list[StoredMessage]:
         """Jobs that were still going when the app last stopped."""

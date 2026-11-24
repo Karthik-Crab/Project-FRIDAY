@@ -119,6 +119,8 @@ class ConversationEngine:
         self.notes = notes
         # Extra facts for the model from the app (where files go, what it can't do).
         self.app_note: str | None = None
+        # FRIDAY's real history with the owner, worked out fresh for each reply.
+        self.timeline: Callable[[], str | None] | None = None
         self.studio = studio
         # An incognito chat: nothing goes into the memory file, and no task goes
         # to Claude Code (it keeps its own record of every task).
@@ -184,8 +186,18 @@ class ConversationEngine:
             self._studio_context(),
             self.notes.context() if self.notes else None,
             self.app_note,
+            self._timeline(),
         ]
         return "\n\n".join(p for p in parts if p) or None
+
+    def _timeline(self) -> str | None:
+        if self.timeline is None:
+            return None
+        try:
+            return self.timeline()
+        except Exception:
+            log.warning("could not work out the timeline", exc_info=True)
+            return None
 
     def _delegate_context(self) -> str | None:
         if self.delegate is None:

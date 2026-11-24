@@ -23,6 +23,7 @@ from friday.app.store import NEW_TITLE, ConversationStore, StoredMessage
 from friday.conversation.delegation import Notice
 from friday.conversation.engine import ConversationEngine
 from friday.conversation.studio import Kind, Request, StudioDelegate, parse_request
+from friday.conversation.timeline import timeline
 from friday.core.errors import FridayError
 from friday.core.messages import Role
 from friday.documents import DocumentError, category, extract_text, for_model
@@ -317,6 +318,9 @@ class AppServices:
         if engine is None:
             engine = self._make_engine(conversation_id)
             engine.app_note = self._files_note()
+            engine.timeline = lambda: timeline(
+                self.store.overview(), conversation_id, engine.persona.user_name
+            )
             engine.incognito = self.is_incognito(conversation_id)
             _load_history(engine, self.store.messages(conversation_id), self._history_text)
         self._engines[conversation_id] = engine  # newest last

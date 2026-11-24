@@ -50,5 +50,9 @@ def test_system_prompt_is_provider_independent_and_mode_specific() -> None:
 
 def test_prompt_states_what_friday_cannot_do() -> None:
     prompt = Persona().system_prompt(Mode.COMPANION, Channel.VOICE)
-    for phrase in ("cannot use\nthe internet", "remember\nearlier sessions", "stage directions"):
+    for phrase in (
+        "cannot use\nthe internet",
+        "from the history further down",
+        "stage directions",
+    ):
         assert phrase in prompt
