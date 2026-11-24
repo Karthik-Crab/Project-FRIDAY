@@ -10,6 +10,7 @@ const els = {
   sidebar: $("sidebar"), toast: $("toast"), chips: $("chips"), hint: $("hint"),
   tray: $("tray"), attach: $("attach"), fileInput: $("file-input"), drop: $("drop"),
   think: $("think-toggle"), mute: $("mute"),
+  suggest: $("suggest"), suggestList: $("suggest-list"),
 };
 
 const state = {
@@ -109,6 +110,29 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+// ---- notes FRIDAY suggests keeping ------------------------------------------
+// After a chat goes quiet, FRIDAY may suggest a few things you said about
+// yourself. Nothing goes into her memory until you press Keep.
+
+function renderSuggestions(items) {
+  els.suggestList.replaceChildren();
+  for (const item of items || []) {
+    const el = document.createElement("div");
+    el.className = "suggest-item";
+    el.innerHTML = `<div>${esc(item.fact)}</div><div class="suggest-actions">
+      <button class="btn primary" data-keep="1">Keep</button>
+      <button class="btn" data-keep="0">No thanks</button></div>`;
+    for (const b of el.querySelectorAll("button")) {
+      b.onclick = () => api(`/api/suggestions/${item.id}`, {
+        method: "POST", body: JSON.stringify({ keep: b.dataset.keep === "1" }),
+      }).then(() => { el.remove(); els.suggest.classList.toggle("hidden", !els.suggestList.children.length); })
+        .catch((e) => toast(e.message));
+    }
+    els.suggestList.append(el);
+  }
+  els.suggest.classList.toggle("hidden", !els.suggestList.children.length);
+}
+
 function nearBottom() {
   const t = els.thread;
   return t.scrollHeight - t.scrollTop - t.clientHeight < 120;
@@ -168,6 +192,7 @@ function onEvent(ev) {
       break;
     }
     case "status": applyStatus(ev); break;
+    case "suggestions": renderSuggestions(ev.items); break;
     case "conversation": upsertConversation(ev.conversation); break;
     case "conversation_deleted":
       state.conversations = state.conversations.filter((c) => c.id !== ev.id);
@@ -894,6 +919,7 @@ for (const [mode, text] of SUGGESTIONS) {
   try {
     state.conversations = await api("/api/conversations");
     applyStatus(await api("/api/status"));
+    api("/api/suggestions").then((r) => renderSuggestions(r.items)).catch(() => {});
   } catch (e) { toast(e.message); }
   const id = (location.hash.match(/^#\/c\/(\w+)/) || [])[1] || null;
   openConversation(id && state.conversations.some((c) => c.id === id) ? id : null);

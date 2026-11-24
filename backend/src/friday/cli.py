@@ -20,7 +20,7 @@ import contextlib
 import logging
 import sys
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -59,6 +59,15 @@ def _notes(config: FridayConfig) -> NoteBook | None:
         also_read=tuple(Path(p).expanduser() for p in memory.also_read),
         share=memory.share_with_claude_code,
     )
+
+
+def _asker(router: ProviderRouter) -> Callable[[ChatRequest], Awaitable[str]]:
+    """The talking model, for jobs in the background (chat summaries)."""
+
+    async def ask(request: ChatRequest) -> str:
+        return "".join([delta async for delta in router.stream("default", request)])
+
+    return ask
 
 
 def _delegate(config: FridayConfig, notes: NoteBook | None) -> CodeDelegate | None:
@@ -849,6 +858,8 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
         vocals=_vocals(config),
         helper_folders=_helper_folders(config),
         voice_audio=config.voice.audio,
+        notes=_notes(config),
+        ask=_asker(router),
     )
     port = config.app.port
     from friday.app.lan import HomeAccess, addresses
@@ -922,6 +933,7 @@ async def _app(config: FridayConfig, router: ProviderRouter, open_browser: bool)
             await _warm_up_local(router, skip=config.studio.gpu_occasional)
         if voice.card is not None:
             await voice.card.prepare_voice()  # into RAM, so voice mode starts fast
+        services.start_keeper()  # summaries of quiet chats, suggested notes
 
     ready = asyncio.create_task(when_ready())
     # The extra listeners start first so that Ctrl+C reaches the main one,

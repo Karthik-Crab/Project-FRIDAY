@@ -1202,3 +1202,43 @@ see below.
   remember me?" is answered as chat instead of being drawn.
 - After you send from the Picture or Music tab, the box goes back to **Chat**
   by itself.
+
+## Memory she can use (2026-11-24)
+
+FRIDAY's model is never changed by talking to her. What she knows about you
+comes from what the app hands her with each message. Three things now add to
+that, all on this computer:
+
+* **Chat summaries.** When a chat has been quiet for 10 minutes and FRIDAY is
+  not busy (no reply, no picture or song being made, voice off), the talking
+  model writes one or two sentences about it. Her list of earlier chats shows
+  that summary instead of the opening lines. A chat that continues gets a new
+  summary later.
+* **Suggested notes.** The same pass may suggest up to three lasting things
+  you said about yourself ("Karthik needs to give his car for service"). They
+  appear in the sidebar under *FRIDAY would like to remember*. **Keep** adds
+  the line to `~/.config/friday/memory/memory.md`; **No thanks** drops it.
+  Nothing is added without your press. A suggestion must be built from your
+  own words, so a guess about your personality is thrown away, and so are
+  one-off requests ("asked for a picture of Kratos").
+* **Searching past chats.** When you ask about the past ("do you remember the
+  flute song?", "what did we talk about two days ago?", "what did I tell you
+  about my car?"), the app looks through the saved chats and gives her the
+  real lines with their dates. If nothing matches, she is told to say she
+  can't find it instead of guessing.
+
+Incognito chats are never summarised, suggested from or searched.
+Summaries and suggestions are stored in `conversations.db` (tables `summaries`
+and `suggestions`) and are deleted with their chat.
+
+Tried with the real model on a copy of the saved chats: across 20 chats the
+first version suggested about 40 "facts", mostly requests; after the filters
+three were left: the car service, washing the bike, and liking calm lo-fi
+  piano (that one came from a music request, so it may be a stretch: press
+  No thanks if it is wrong). Asked "Did we
+ever talk about cricket?" she said no and that she couldn't find it; asked
+about the car she quoted your line word for word.
+
+Limits: the summaries come from the small local model, so they are plain and
+sometimes miss a detail. A search finds words, not meaning ("the bike" will
+not find "my motorcycle").

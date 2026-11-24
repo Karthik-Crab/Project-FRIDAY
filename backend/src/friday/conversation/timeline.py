@@ -23,6 +23,7 @@ class ChatSummary:
     messages: int
     # The first things the owner said in it, oldest first.
     opening: Sequence[str] = field(default_factory=tuple)
+    summary: str = ""  # what it was about, written after it went quiet
 
 
 def _ago(day: date, today: date) -> str:
@@ -67,8 +68,8 @@ def timeline(
         f"Your real history with {user_name}, from the chats saved on this computer "
         "(incognito chats are left out). It is all you know about earlier "
         "conversations besides the notes. Of each earlier chat you see only when it "
-        "was and how it began, not the rest, so never say you remember every "
-        "conversation, and never guess dates, how long you have known them, or what "
+        "was and a short summary or how it began, not the rest, so never say you remember "
+        "every conversation, and never guess dates, how long you have known them, or what "
         "else was said.",
     ]
     if not earlier:
@@ -88,10 +89,11 @@ def timeline(
         shown = earlier[-RECENT:]
         if earlier[0] not in shown:
             shown = [earlier[0], *shown]
-        lines.append("Earlier chats, oldest first, with how each began:")
+        lines.append("Earlier chats, oldest first, with a summary or how each began:")
         for chat in shown:
             said = " / ".join(f'"{_line(t)}"' for t in chat.opening) or "(no words)"
-            lines.append(f"- {_when(chat.created, today)}, {chat.messages} messages: {said}")
+            about = f"About: {chat.summary}" if chat.summary else f"Began: {said}"
+            lines.append(f"- {_when(chat.created, today)}, {chat.messages} messages. {about}")
         if len(earlier) > len(shown):
             lines.append(f"({len(earlier) - len(shown)} more chats in between are not listed.)")
     return "\n".join(lines)

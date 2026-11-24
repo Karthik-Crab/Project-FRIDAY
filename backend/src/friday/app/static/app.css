@@ -322,3 +322,11 @@ textarea#input {
 .sources a:hover { color: var(--text); border-color: var(--accent); }
 /* An answer from Claude Code */
 .msg.from-agent .body { border-left: 3px solid var(--accent); padding-left: 12px; }
+
+/* Notes FRIDAY suggests keeping, after a chat goes quiet */
+.suggest-item {
+  background: var(--accent-soft); border-radius: 10px; padding: 8px 10px; margin: 0 4px 6px;
+  font-size: 13px; line-height: 1.4;
+}
+.suggest-item .suggest-actions { display: flex; gap: 6px; margin-top: 6px; }
+.suggest-item .btn { padding: 3px 10px; font-size: 12px; }

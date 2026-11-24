@@ -14,18 +14,20 @@ import re
 import shutil
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from friday.app.store import NEW_TITLE, ConversationStore, StoredMessage
+from friday.conversation import keeper, recall
 from friday.conversation.delegation import Notice
 from friday.conversation.engine import ConversationEngine
+from friday.conversation.notes import NoteBook
 from friday.conversation.studio import Kind, Request, StudioDelegate, is_chat, parse_request
 from friday.conversation.timeline import timeline
 from friday.core.errors import FridayError
-from friday.core.messages import Role
+from friday.core.messages import ChatRequest, Role
 from friday.documents import DocumentError, category, extract_text, for_model
 from friday.integrations import image_edit
 from friday.integrations.audio_tools import (
@@ -42,6 +44,7 @@ from friday.integrations.vocals import VocalSplitter, parse_vocal_task
 from friday.integrations.vocals import describe as vocals_describe
 from friday.integrations.vocals import note as vocals_note
 from friday.integrations.vocals import output_name as vocals_output_name
+from friday.persona.persona import Persona
 
 log = logging.getLogger(__name__)
 
@@ -141,8 +144,16 @@ class AppServices:
         vocals: VocalSplitter | None = None,
         helper_folders: Sequence[Path] = (),
         voice_audio: str = "device",
+        notes: NoteBook | None = None,
+        ask: Callable[[ChatRequest], Awaitable[str]] | None = None,
     ) -> None:
         self.store = store
+        # The memory file, and the talking model for chat summaries and
+        # suggested notes (None: neither is kept).
+        self.notes = notes
+        self._ask = ask
+        self._keeper: asyncio.Task[None] | None = None
+        self._keep_failed: set[str] = set()
         # "browser": voice mode uses the microphone and speaker of the page that
         # switched it on; "device": this PC's own.
         self.voice_audio_kind = voice_audio
@@ -320,6 +331,14 @@ class AppServices:
             engine.app_note = self._files_note()
             engine.timeline = lambda: timeline(
                 self.store.overview(), conversation_id, engine.persona.user_name
+            )
+            engine.recall = lambda question: recall.search(
+                question,
+                [
+                    recall.Line(m.conversation_id, m.role, m.content, m.created)
+                    for m in self.store.search_messages(exclude=conversation_id)
+                ],
+                engine.persona.user_name,
             )
             engine.incognito = self.is_incognito(conversation_id)
             _load_history(engine, self.store.messages(conversation_id), self._history_text)
@@ -1209,7 +1228,88 @@ class AppServices:
         path = Path(message.file)
         return path if path.is_file() else None
 
+    # ---- what FRIDAY keeps from each chat --------------------------------
+
+    def start_keeper(self, idle_s: float = 600, every_s: float = 60) -> None:
+        """Summarise chats that went quiet and suggest notes, in the background."""
+        if self._ask is None or self._keeper is not None:
+            return
+
+        async def loop() -> None:
+            while True:
+                await asyncio.sleep(every_s)
+                try:
+                    await self.keep_one(idle_s)
+                except Exception:
+                    log.warning("could not summarise a chat", exc_info=True)
+
+        self._keeper = asyncio.get_running_loop().create_task(loop())
+
+    @property
+    def _busy(self) -> bool:
+        voice_on = bool(self.voice and self.voice.state != "off")
+        return bool(self._replies or self._jobs or voice_on)
+
+    async def keep_one(self, idle_s: float = 600) -> str | None:
+        """Summarise one quiet chat; returns its id, or None if there was nothing to do.
+
+        Only while FRIDAY is otherwise idle, so it never slows a reply."""
+        if self._ask is None or self._busy:
+            return None
+        waiting = [
+            c
+            for c in self.store.needing_summary(time.time() - idle_s)
+            if c not in self._keep_failed
+        ]
+        if not waiting:
+            return None
+        cid = waiting[0]
+        messages = [m for m in self.store.messages(cid) if m.kind == "text"]
+        if not messages:
+            return None
+        user = self._user_name()
+        known = [*(self.notes.facts() if self.notes else []), *self.store.all_suggested()]
+        try:
+            kept = await keeper.keep(
+                [(m.role, self._history_text(m, read_documents=False)) for m in messages],
+                self._ask,
+                user,
+                known,
+            )
+        except Exception as exc:
+            self._keep_failed.add(cid)  # not again this session
+            log.warning("could not summarise chat %s: %s", cid, exc)
+            return None
+        last = max(m.id for m in self.store.messages(cid))
+        self.store.set_summary(cid, kept.summary or self.store.summary(cid)[0], last)
+        if self.notes is not None:
+            for fact in kept.facts:
+                self.store.suggest(cid, fact)
+        if kept.facts:
+            self.emit({"type": "suggestions", "items": self.suggestions()})
+        return cid
+
+    def suggestions(self) -> list[dict[str, Any]]:
+        return self.store.suggestions() if self.notes is not None else []
+
+    def answer_suggestion(self, suggestion_id: int, keep: bool) -> None:
+        fact = self.store.answer_suggestion(suggestion_id, keep)
+        if fact is None:
+            raise FridayError("that suggestion was already answered")
+        if keep and self.notes is not None and not self.notes.remember(fact):
+            raise FridayError("the note couldn't be saved")
+        self.emit({"type": "suggestions", "items": self.suggestions()})
+
+    def _user_name(self) -> str:
+        for engine in self._engines.values():
+            return engine.persona.user_name
+        return Persona().user_name
+
     async def aclose(self) -> None:
+        if self._keeper is not None:
+            self._keeper.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._keeper
         for task in list(self._jobs.values()):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):

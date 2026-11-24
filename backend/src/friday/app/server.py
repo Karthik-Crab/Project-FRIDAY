@@ -207,6 +207,22 @@ def create_app(
         services.delete_conversation(conversation_id)
         return {"ok": True}
 
+    @app.get("/api/suggestions")
+    async def suggestions() -> dict[str, Any]:
+        """Notes FRIDAY suggests keeping, waiting for the owner's yes or no."""
+        return {"items": services.suggestions()}
+
+    @app.post("/api/suggestions/{suggestion_id}")
+    async def answer_suggestion(suggestion_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        keep = body.get("keep")
+        if not isinstance(keep, bool):
+            raise HTTPException(400, "keep must be true or false")
+        try:
+            services.answer_suggestion(suggestion_id, keep)
+        except FridayError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"ok": True}
+
     @app.post("/api/upload")
     async def upload(request: Request, name: str) -> dict[str, Any]:
         """A file attached in the chat box. The body is the file itself."""

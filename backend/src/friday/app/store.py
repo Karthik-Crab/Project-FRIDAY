@@ -42,6 +42,18 @@ CREATE TABLE IF NOT EXISTS messages (
     created REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages(conversation_id, id);
+CREATE TABLE IF NOT EXISTS summaries (
+    conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+    summary TEXT NOT NULL,
+    upto INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS suggestions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    fact TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created REAL NOT NULL
+);
 """
 
 
@@ -210,8 +222,9 @@ class ConversationStore:
         """Every saved (not incognito) chat: when, how long, how it began."""
         with self._lock:
             chats = self._db.execute(
-                "SELECT c.id, c.created, c.updated, COUNT(m.id) AS n FROM conversations c"
-                " JOIN messages m ON m.conversation_id = c.id"
+                "SELECT c.id, c.created, c.updated, COUNT(m.id) AS n, s.summary"
+                " FROM conversations c JOIN messages m ON m.conversation_id = c.id"
+                " LEFT JOIN summaries s ON s.conversation_id = c.id"
                 " WHERE c.incognito = 0 GROUP BY c.id ORDER BY c.created"
             ).fetchall()
             said: dict[str, list[str]] = {}
@@ -224,9 +237,94 @@ class ConversationStore:
                 if len(first) < opening and row[1].strip():
                     first.append(row[1])
         return [
-            ChatSummary(r["id"], r["created"], r["updated"], r["n"], tuple(said.get(r["id"], ())))
+            ChatSummary(
+                r["id"],
+                r["created"],
+                r["updated"],
+                r["n"],
+                tuple(said.get(r["id"], ())),
+                r["summary"] or "",
+            )
             for r in chats
         ]
+
+    # What FRIDAY keeps from each chat (see conversation/keeper.py)
+
+    def needing_summary(self, idle_since: float) -> list[str]:
+        """Saved chats with new messages, untouched since ``idle_since``; oldest first."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT c.id FROM conversations c JOIN messages m ON m.conversation_id = c.id"
+                " LEFT JOIN summaries s ON s.conversation_id = c.id"
+                " WHERE c.incognito = 0 AND c.updated < ?"
+                " GROUP BY c.id HAVING MAX(m.id) > COALESCE(MAX(s.upto), 0)"
+                " AND COUNT(m.id) >= 2 ORDER BY c.updated",
+                (idle_since,),
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def summary(self, conversation_id: str) -> tuple[str, int]:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT summary, upto FROM summaries WHERE conversation_id = ?", (conversation_id,)
+            ).fetchone()
+        return (row[0], row[1]) if row else ("", 0)
+
+    def set_summary(self, conversation_id: str, summary: str, upto: int) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO summaries (conversation_id, summary, upto) VALUES (?, ?, ?)"
+                " ON CONFLICT(conversation_id) DO UPDATE SET summary = ?, upto = ?",
+                (conversation_id, summary, upto, summary, upto),
+            )
+
+    def suggest(self, conversation_id: str, fact: str) -> int:
+        with self._lock, self._db:
+            cur = self._db.execute(
+                "INSERT INTO suggestions (conversation_id, fact, created) VALUES (?, ?, ?)",
+                (conversation_id, fact, time.time()),
+            )
+        return int(cur.lastrowid or 0)
+
+    def suggestions(self, status: str = "pending") -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, conversation_id, fact, created FROM suggestions"
+                " WHERE status = ? ORDER BY id",
+                (status,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def all_suggested(self) -> list[str]:
+        """Every fact ever suggested, kept or not (so none is suggested twice)."""
+        with self._lock:
+            return [r[0] for r in self._db.execute("SELECT fact FROM suggestions")]
+
+    def answer_suggestion(self, suggestion_id: int, keep: bool) -> str | None:
+        """Mark it kept or dropped; returns the fact if it was still waiting."""
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT fact FROM suggestions WHERE id = ? AND status = 'pending'",
+                (suggestion_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            self._db.execute(
+                "UPDATE suggestions SET status = ? WHERE id = ?",
+                ("kept" if keep else "dropped", suggestion_id),
+            )
+        return str(row[0])
+
+    def search_messages(self, exclude: str | None = None) -> list[StoredMessage]:
+        """Every text message of the saved chats (for searching past chats)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT m.* FROM messages m JOIN conversations c ON c.id = m.conversation_id"
+                " WHERE c.incognito = 0 AND m.kind = 'text' AND m.conversation_id != ?"
+                " ORDER BY m.id",
+                (exclude or "",),
+            ).fetchall()
+        return [_message(r) for r in rows]
 
     def unfinished_jobs(self) -> list[StoredMessage]:
         """Jobs that were still going when the app last stopped."""

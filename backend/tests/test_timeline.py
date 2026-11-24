@@ -37,7 +37,7 @@ def test_dates_counts_and_openings_come_from_the_saved_chats() -> None:
     assert "You first talked Saturday 21 November 2026 at 15:00 (3 days ago)." in text
     assert "3 saved chats so far, on 3 different days." in text
     assert "The last chat before this one: yesterday at 19:00." in text
-    assert '44 messages: "Hey Friday" / "make a song"' in text
+    assert '44 messages. Began: "Hey Friday" / "make a song"' in text
     assert "Do you remember me?" not in text  # this chat is in the window already
 
 

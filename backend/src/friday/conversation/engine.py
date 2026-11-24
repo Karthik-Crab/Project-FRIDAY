@@ -17,6 +17,7 @@ from datetime import datetime
 from friday.conversation.delegation import CodeDelegate, is_agent_command, not_set_up_reply
 from friday.conversation.memory import INTERRUPTED_MARKER, ConversationWindow
 from friday.conversation.notes import NoteBook
+from friday.conversation.recall import wants_recall
 from friday.conversation.studio import StudioDelegate, is_studio_command, parse_request
 from friday.conversation.studio import not_set_up_reply as studio_not_set_up
 from friday.core.errors import ProviderError
@@ -121,6 +122,8 @@ class ConversationEngine:
         self.app_note: str | None = None
         # FRIDAY's real history with the owner, worked out fresh for each reply.
         self.timeline: Callable[[], str | None] | None = None
+        # Searches past chats when asked about them ("what did we say yesterday?").
+        self.recall: Callable[[str], str | None] | None = None
         self.studio = studio
         # An incognito chat: nothing goes into the memory file, and no task goes
         # to Claude Code (it keeps its own record of every task).
@@ -283,6 +286,13 @@ class ConversationEngine:
         web_note = None
         if self.web is not None and not images:
             web_note = await self._look_up(user_text, turn) or NO_SEARCH_NOTE
+        if self.recall is not None and not images and wants_recall(user_text):
+            try:
+                found = self.recall(user_text)
+            except Exception:
+                log.warning("could not search past chats", exc_info=True)
+                found = None
+            web_note = "\n\n".join(p for p in (found, web_note) if p) or None
         request = self.build_request(web_note)
         purpose = MODE_PURPOSE[self.mode]
         if images:
