@@ -1271,3 +1271,30 @@ mxbai-embed-large) were downloaded only for the test and removed again.
 One thing I learned in the test: if FRIDAY makes something up early in a
 chat, she tends to build on it in later answers in that chat. Asked in a
 fresh chat, the same questions were answered correctly.
+
+## Getting more out of the 8B model (2026-11-24)
+
+The bigger models tried today don't fit the 8 GB graphics card: the 14B ran
+half on the processor (3-9 s per reply instead of under 1 s), and the only
+sharper copy of the 8B is 8.7 GB. Both are worth trying with a bigger card.
+Until then, three changes help the 8B:
+
+* **Thinking only when it helps.** A message with numbers that asks for a
+  sum, a time, a date or a comparison ("will I make it to the car service at
+  5?", "how much is 3 shirts at 499?") lets the model think first. On 6 such
+  questions asked 3 times each she went from 12 to 18 right, at about 4
+  seconds per answer instead of 0.6. Everything else stays instant. In voice
+  mode that means a few seconds of quiet before she answers a sum.
+* **A calendar.** Every message carries the past week and the next two with
+  their weekdays, so "what day is 1 December?" is read, not guessed.
+* **The truth next to questions about her.** Her rules already said she
+  doesn't learn or miss anyone, but a small model loses rules in a long
+  prompt. Now "did you miss me?", "have you grown?" or "what do you think of
+  my personality?" get a short note right beside them. "Did you miss me?"
+  went from "I was just thinking about you" (4 in 5) to "I don't feel time
+  pass between our chats, but I'm glad you're back" (5 in 5). Asked about
+  your personality she now lists real things you did instead of inventing
+  traits (9 in 10).
+
+Tried and left out: the sampling settings Qwen suggests (no clear
+difference in 35 test answers). The 14B download was removed again.

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from enum import StrEnum
 
 
@@ -58,6 +58,7 @@ third person.
 {abilities}
 
 It is now {now} (from this computer's clock).
+Calendar, to read days and dates from instead of working them out: {calendar}.
 
 What you are, plainly:
 - Only {user_name} talks to you. Nobody else uses you, you have never helped
@@ -171,6 +172,23 @@ def without_sounds(text: str) -> str:
     return _SOUND_MARK.sub("", text).strip()
 
 
+def calendar(today: date | None = None) -> str:
+    """The week before today and the two after, with their weekdays."""
+    today = today or date.today()
+    days = []
+    for offset in range(-7, 15):
+        day = today + timedelta(days=offset)
+        name = f"{day:%a} {day.day} {day:%b}"
+        if offset == 0:
+            name += " (today)"
+        elif offset == -1:
+            name += " (yesterday)"
+        elif offset == 1:
+            name += " (tomorrow)"
+        days.append(name)
+    return ", ".join(days)
+
+
 @dataclass(frozen=True, slots=True)
 class Persona:
     user_name: str = "Karthik"
@@ -186,6 +204,7 @@ class Persona:
                 user_name=self.user_name,
                 abilities=self._abilities(),
                 now=datetime.now().strftime("%A %d %B %Y, %H:%M"),
+                calendar=calendar(),
             ),
             MODE_OVERLAYS[mode].format(user_name=self.user_name),
             CHANNEL_RULES[channel].format(user_name=self.user_name),

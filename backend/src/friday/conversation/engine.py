@@ -14,12 +14,14 @@ from contextlib import aclosing
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 
+from friday.conversation.about_her import truth_note
 from friday.conversation.delegation import CodeDelegate, is_agent_command, not_set_up_reply
 from friday.conversation.memory import INTERRUPTED_MARKER, ConversationWindow
 from friday.conversation.notes import NoteBook
 from friday.conversation.recall import wants_recall
 from friday.conversation.studio import StudioDelegate, is_studio_command, parse_request
 from friday.conversation.studio import not_set_up_reply as studio_not_set_up
+from friday.conversation.working_out import needs_working_out
 from friday.core.errors import ProviderError
 from friday.core.messages import ChatRequest, Message, Role
 from friday.integrations.web import (
@@ -116,6 +118,8 @@ class ConversationEngine:
         self.last_turn = TurnInfo(mode=mode)
         # Think before answering, for models that can (None: as configured).
         self.think: bool | None = None
+        # This message asks for sums, times or dates: think before answering.
+        self._working_out = False
         self.delegate = delegate
         self.notes = notes
         # Extra facts for the model from the app (where files go, what it can't do).
@@ -180,7 +184,7 @@ class ConversationEngine:
             messages=self.window.messages,
             max_tokens=self._max_tokens[self.channel],
             temperature=0.8 if self.mode is Mode.COMPANION else 0.4,
-            think=self.think,
+            think=True if self._working_out else self.think,
         )
 
     def _extra_context(self) -> str | None:
@@ -283,6 +287,7 @@ class ConversationEngine:
 
         self.window.add_user(user_text)
         turn.user_stored = True
+        self._working_out = not images and needs_working_out(user_text)
         web_note = None
         if self.web is not None and not images:
             web_note = await self._look_up(user_text, turn) or NO_SEARCH_NOTE
@@ -293,6 +298,8 @@ class ConversationEngine:
                 log.warning("could not search past chats", exc_info=True)
                 found = None
             web_note = "\n\n".join(p for p in (found, web_note) if p) or None
+        if not images and (truth := truth_note(user_text, self.persona.user_name)):
+            web_note = "\n\n".join(p for p in (web_note, truth) if p)
         request = self.build_request(web_note)
         purpose = MODE_PURPOSE[self.mode]
         if images:
