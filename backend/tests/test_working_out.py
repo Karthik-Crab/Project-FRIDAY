@@ -34,7 +34,14 @@ def test_she_reads_days_from_a_calendar() -> None:
 def test_questions_about_her_get_the_truth_next_to_them() -> None:
     assert "switched off" in str(truth_note("Did you miss me?", "Karthik"))
     assert "never changes" in str(truth_note("Have you grown since we first met?", "Karthik"))
-    assert "Honestly, I only know" in str(truth_note("What do you think of my personality?", "K"))
+    for asked in (
+        "What do you think of my personality?",
+        "Nothing much. Do you know about me?",
+        "Do you remember me?",
+        "How do you know all of these things about me?",
+        "Who am I?",
+    ):
+        assert "Honestly, I only know" in str(truth_note(asked, "K")), asked
     for said in ("Can you learn to play chess?", "Did you change the song?", "I miss my mom"):
         assert truth_note(said, "Karthik") is None, said
 

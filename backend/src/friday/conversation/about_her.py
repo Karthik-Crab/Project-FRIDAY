@@ -40,6 +40,9 @@ _NOTES: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
             r"\b(?:my\s+personality|what\s+(?:do|did)\s+you\s+(?:think|know)\s+(?:of|about)\s+me|"
+            r"(?:do|did)\s+you\s+(?:really\s+|even\s+|still\s+)?(?:know|remember)\s+"
+            r"(?:anything\s+|much\s+)?(?:about\s+)?me\b|how\s+do\s+you\s+know\b.*\bme\b|"
+            r"who\s+am\s+i\b|tell\s+me\s+about\s+(?:me|myself)\b|"
             r"describe\s+me|what\s+am\s+i\s+like|what\s+kind\s+of\s+(?:person|guy|man|woman)\s+am\s+i)",
             re.IGNORECASE,
         ),
