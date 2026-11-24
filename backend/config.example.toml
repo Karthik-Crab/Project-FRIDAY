@@ -7,7 +7,7 @@
 # or, for development only, in environment variables FRIDAY_<NAME>_API_KEY
 # (e.g. FRIDAY_ANTHROPIC_API_KEY).
 
-user_name = "Karthik"
+user_name = "Alex"
 default_mode = "companion"   # or "work"
 offline = false              # true = never call cloud providers
 log_level = "INFO"

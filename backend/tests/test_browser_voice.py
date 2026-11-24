@@ -137,7 +137,7 @@ async def test_browser_voice_needs_a_page(tmp_path: Path) -> None:
 
 
 def test_the_home_certificate_only_vouches_for_home_addresses(tmp_path: Path) -> None:
-    cert = tls.ensure(tmp_path, ["nobara-pc.local", "example.com"], ["192.168.0.110", "8.8.8.8"])
+    cert = tls.ensure(tmp_path, ["nobara-pc.local", "example.com"], ["192.168.1.20", "8.8.8.8"])
     ca = x509.load_pem_x509_certificate(cert.ca_file.read_bytes())
     limits = ca.extensions.get_extension_for_class(x509.NameConstraints)
     assert limits.critical
@@ -150,41 +150,41 @@ def test_the_home_certificate_only_vouches_for_home_addresses(tmp_path: Path) ->
     server.verify_directly_issued_by(ca)
     san = server.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
     assert san.get_values_for_type(x509.DNSName) == ["nobara-pc.local"]  # not example.com
-    assert [str(a) for a in san.get_values_for_type(x509.IPAddress)] == ["192.168.0.110"]
+    assert [str(a) for a in san.get_values_for_type(x509.IPAddress)] == ["192.168.1.20"]
     assert server.not_valid_after_utc - dt.datetime.now(dt.UTC) < dt.timedelta(days=398)
     for key in (tmp_path / "friday-home-ca.key", cert.key_file):
         assert stat.S_IMODE(key.stat().st_mode) == 0o600
 
 
 def test_a_new_address_gets_a_new_certificate_from_the_same_authority(tmp_path: Path) -> None:
-    first = tls.ensure(tmp_path, ["nobara-pc.local"], ["192.168.0.110"])
-    again = tls.ensure(tmp_path, ["nobara-pc.local"], ["192.168.0.110"])
+    first = tls.ensure(tmp_path, ["nobara-pc.local"], ["192.168.1.20"])
+    again = tls.ensure(tmp_path, ["nobara-pc.local"], ["192.168.1.20"])
     assert first.cert_file.read_bytes() == again.cert_file.read_bytes()  # kept
-    moved = tls.ensure(tmp_path, ["nobara-pc.local"], ["192.168.0.120"])
+    moved = tls.ensure(tmp_path, ["nobara-pc.local"], ["192.168.1.21"])
     assert moved.fingerprint == first.fingerprint  # devices need nothing new
     server = x509.load_pem_x509_certificates(moved.cert_file.read_bytes())[0]
-    assert "192.168.0.120" in str(server.extensions)
+    assert "192.168.1.21" in str(server.extensions)
 
 
 def test_the_setup_page_serves_the_certificate_and_forwards_to_https(tmp_path: Path) -> None:
-    cert = tls.ensure(tmp_path, ["nobara-pc.local"], ["192.168.0.110"])
+    cert = tls.ensure(tmp_path, ["nobara-pc.local"], ["192.168.1.20"])
     app = create_setup_app(8443, cert.ca_file)
     phone = TestClient(
         app,
-        base_url="http://192.168.0.110:8765",
-        client=("192.168.0.50", 5000),
+        base_url="http://192.168.1.20:8765",
+        client=("192.168.1.50", 5000),
         follow_redirects=False,
     )
     page = phone.get("/")
-    assert page.status_code == 200 and "https://192.168.0.110:8443/" in page.text
+    assert page.status_code == 200 and "https://192.168.1.20:8443/" in page.text
     crt = phone.get("/FRIDAY-home.crt")
     assert crt.headers["content-type"] == "application/x-x509-ca-cert"
     assert x509.load_der_x509_certificate(crt.content).subject.rfc4514_string() == "CN=FRIDAY home"
     moved = phone.get("/api/conversations")
     assert moved.status_code == 308
-    assert moved.headers["location"] == "https://192.168.0.110:8443/api/conversations"
+    assert moved.headers["location"] == "https://<pc-address>:8443/api/conversations"
     assert phone.get("/", headers={"host": "evil.example:8765"}).status_code == 403
-    outsider = TestClient(app, base_url="http://192.168.0.110:8765", client=("8.8.8.8", 5000))
+    outsider = TestClient(app, base_url="http://192.168.1.20:8765", client=("8.8.8.8", 5000))
     assert outsider.get("/FRIDAY-home.crt").status_code == 403
 
 

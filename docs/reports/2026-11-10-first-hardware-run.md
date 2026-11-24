@@ -224,7 +224,7 @@ whether pronunciation suffers; silence the warning if not.
 **P3-b. STT accuracy** on the laptop mic (section 7). Consider an
 `initial_prompt`/hotwords with "Friday" and user vocabulary.
 
-**P3-c. Persona.** It says "I'm Karthik's AI companion" but treats the speaker
+**P3-c. Persona.** It says "I'm the owner's AI companion" but treats the speaker
 as a stranger; in step 5 it apologised for replying to a statement. Also some
 factual errors in the internet-history answer (3B model). Prompt and model
 choice, not pipeline.

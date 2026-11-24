@@ -33,7 +33,7 @@ system snapshot. Found on 2026-11-21:
   8 GB floor, so, agreed with the owner: **a 100 GB file
   `FRIDAY-linux-studio.img` on the Windows partition** (`nvme0n1p3`, label
   "OS", 74 GB left free for Windows), formatted ext4, label `friday-studio`,
-  UUID `13cafa71-3f51-4eb3-b6be-4a9bcf526749`. No partition was resized. It
+  UUID `<uuid>`. No partition was resized. It
   is to be mounted at `/mnt/studio` (Ollama runs as its own user and cannot
   read the home folder) and hold ComfyUI and Ollama's
   models. Not mounted yet (needs the owner's `sudo`). Do not delete that file
@@ -260,7 +260,7 @@ Loading speech models...
 Listening. Use a headset for now (no echo cancellation yet). Ctrl+C to quit.
 
 you> Explain how a rainbow forms in detail.
-friday> That's a fantastic question, Karthik.
+friday> That's a fantastic question, Alex.
 friday> It's actually quite beautiful how it all works.
 friday> Basically, a rainbow is formed by sunlight and water droplets.
 friday> When sunlight enters a raindrop, it slows down and bends – that's called refraction. Because the light is different colours, each colour bends at a slightly different angle.
@@ -374,16 +374,16 @@ Full output:
 
 ```
 Loading the voice model on cuda...
-/home/karthik/local-ai/chatterbox-venv/lib64/python3.11/site-packages/perth/perth_net/__init__.py:1: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+~/local-ai/chatterbox-venv/lib64/python3.11/site-packages/perth/perth_net/__init__.py:1: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
   from pkg_resources import resource_filename
 Traceback (most recent call last):
-  File "/home/karthik/local-ai/Project-FRIDAY/backend/servers/chatterbox_server.py", line 162, in <module>
+  File "~/local-ai/Project-FRIDAY/backend/servers/chatterbox_server.py", line 162, in <module>
     sys.exit(main())
              ^^^^^^
-  File "/home/karthik/local-ai/Project-FRIDAY/backend/servers/chatterbox_server.py", line 147, in main
+  File "~/local-ai/Project-FRIDAY/backend/servers/chatterbox_server.py", line 147, in main
     voice = ChatterboxVoice(args.device, args.nano, args.voice)
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/karthik/local-ai/Project-FRIDAY/backend/servers/chatterbox_server.py", line 48, in __init__
+  File "~/local-ai/Project-FRIDAY/backend/servers/chatterbox_server.py", line 48, in __init__
     self._model: Any = ChatterboxTurboTTS.from_pretrained(device=device, nano=nano)
                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 TypeError: ChatterboxTurboTTS.from_pretrained() got an unexpected keyword argument 'nano'
@@ -457,20 +457,20 @@ service needs.
 
 **Check 9: PASS.**
 
-- Drive: `sdb1`, NTFS, label "Karthik's HDD", UUID `B0A22AD0A22A9ABC`, 1.9 TB,
+- Drive: `sdb1`, NTFS, label "<data drive>", UUID `<uuid>`, 1.9 TB,
   785 GB used, **1.1 TB free**.
 - Not mounted at the start of the stage. `udisksctl mount` (no sudo) mounted it
-  cleanly at `/run/media/karthik/Karthik_s HDD`, so `ntfsfix` was not needed.
+  cleanly at `/run/media/<user>/<label>`, so `ntfsfix` was not needed.
   Unmounted again before the owner changed fstab.
 - Owner ran: `mkdir /mnt/ai-hdd`, backed up fstab to `/etc/fstab.before-ai-hdd`,
   added the line below, `daemon-reload`, `mount -a`.
 
 ```
-UUID=B0A22AD0A22A9ABC  /mnt/ai-hdd  ntfs-3g  defaults,nofail,uid=1000,gid=1000  0  0
+UUID=<uuid>  /mnt/ai-hdd  ntfs-3g  defaults,nofail,uid=1000,gid=1000  0  0
 ```
 
 - `findmnt`: `/mnt/ai-hdd  /dev/sdb1  fuseblk  rw,relatime,...,allow_other`.
-  Owned by `karthik:karthik`. A test file was created and deleted in
+  Owned by the owner's user. A test file was created and deleted in
   `/mnt/ai-hdd/ai-models`. `nofail` is in the line. Not yet tested across a
   reboot.
 - ntfs-3g shows every file as `-rwxrwxrwx`. Harmless for model files.
@@ -875,7 +875,7 @@ change: `[providers.local] model = "gemma3-cpu"`. CPU-only. `stt_model =
 
 Run 1: not started. Run 2: check 9 PASS (see "Run 2: stage 9" at the top);
 fstab line added:
-`UUID=B0A22AD0A22A9ABC  /mnt/ai-hdd  ntfs-3g  defaults,nofail,uid=1000,gid=1000  0  0`.
+`UUID=<uuid>  /mnt/ai-hdd  ntfs-3g  defaults,nofail,uid=1000,gid=1000  0  0`.
 Checks 10 to 14 not started.
 
 ## 10. Downloads and free space
@@ -888,7 +888,7 @@ Checks 10 to 14 not started.
 | Whisper `base.en` and `small.en` | 605 MB together | `~/.cache/huggingface` (SSD) |
 
 Free space at the end: SSD (`/` and `/home`, btrfs, one 84 GB pool) **25 GB**
-free (30 GB at the start). Karthik's HDD about 1.1 TB free (not mounted at the
+free (30 GB at the start). The data HDD about 1.1 TB free (not mounted at the
 end).
 
 SSD space will not cover the rest of the brief as written: ComfyUI (10 to 15
@@ -1027,7 +1027,7 @@ type it twice:
 
 Then restart FRIDAY. Each new device needs FRIDAY's home certificate once (next
 section); after that it opens `https://nobara-pc.local:8443/` (keeps working when
-the router changes the PC's number) or `https://192.168.0.110:8443/` today. The switch is `lan = true` under
+the router changes the PC's number) or `https://<pc-address>:8443/` today. The switch is `lan = true` under
 `[app]` in `~/.config/friday/config.toml` (backup: `config.toml.bak-20261121-lan`).
 Without a passcode, FRIDAY stays on this PC only.
 
@@ -1215,7 +1215,7 @@ that, all on this computer:
   that summary instead of the opening lines. A chat that continues gets a new
   summary later.
 * **Suggested notes.** The same pass may suggest up to three lasting things
-  you said about yourself ("Karthik needs to give his car for service"). They
+  you said about yourself ("Alex needs to give his car for service"). They
   appear in the sidebar under *FRIDAY would like to remember*. **Keep** adds
   the line to `~/.config/friday/memory/memory.md`; **No thanks** drops it.
   Nothing is added without your press. A suggestion must be built from your
@@ -1233,11 +1233,10 @@ and `suggestions`) and are deleted with their chat.
 
 Tried with the real model on a copy of the saved chats: across 20 chats the
 first version suggested about 40 "facts", mostly requests; after the filters
-three were left: the car service, washing the bike, and liking calm lo-fi
-  piano (that one came from a music request, so it may be a stretch: press
-  No thanks if it is wrong). Asked "Did we
+three were left, all things the owner had really said (one came from a music
+  request, so it was a stretch: No thanks drops such a one). Asked "Did we
 ever talk about cricket?" she said no and that she couldn't find it; asked
-about the car she quoted your line word for word.
+about something from an earlier chat she quoted the line word for word.
 
 Limits: the summaries come from the small local model, so they are plain and
 sometimes miss a detail. A search finds words, not meaning ("the bike" will
@@ -1265,7 +1264,7 @@ about my ...").
 
 I compared three such models on your chats; qwen3-embedding was the only one
 that put the right line first for "the guy from the video game" (Kratos)
-and "that sad old tamil song". The other two (nomic-embed-text,
+and "that sad old folk song". The other two (nomic-embed-text,
 mxbai-embed-large) were downloaded only for the test and removed again.
 
 One thing I learned in the test: if FRIDAY makes something up early in a

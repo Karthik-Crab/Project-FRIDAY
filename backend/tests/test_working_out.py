@@ -32,8 +32,8 @@ def test_she_reads_days_from_a_calendar() -> None:
 
 
 def test_questions_about_her_get_the_truth_next_to_them() -> None:
-    assert "switched off" in str(truth_note("Did you miss me?", "Karthik"))
-    assert "never changes" in str(truth_note("Have you grown since we first met?", "Karthik"))
+    assert "switched off" in str(truth_note("Did you miss me?", "Alex"))
+    assert "never changes" in str(truth_note("Have you grown since we first met?", "Alex"))
     for asked in (
         "What do you think of my personality?",
         "Nothing much. Do you know about me?",
@@ -61,7 +61,7 @@ def test_questions_about_her_get_the_truth_next_to_them() -> None:
     assert "saved past chats" in str(truth_note("Do you have anything in your memory?", "K"))
     assert truth_note("I have great memories of Goa", "K") is None
     for said in ("Can you learn to play chess?", "Did you change the song?", "I miss my mom"):
-        assert truth_note(said, "Karthik") is None, said
+        assert truth_note(said, "Alex") is None, said
 
 
 async def test_only_a_sum_makes_her_think() -> None:

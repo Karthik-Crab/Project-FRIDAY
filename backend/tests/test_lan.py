@@ -15,7 +15,7 @@ from friday.app.lan import COOKIE, HomeAccess, home_host, is_home_network
 from friday.app.server import create_app
 
 SECRET = "correct horse battery"
-PC = "http://192.168.0.110:8765"
+PC = "http://192.168.1.20:8765"
 
 
 @pytest.fixture(autouse=True)
@@ -30,7 +30,7 @@ def _access(tmp_path: Path, passcode: str | None = SECRET) -> HomeAccess:
     return access
 
 
-def _device(tmp_path: Path, access: HomeAccess, ip: str = "192.168.0.50") -> TestClient:
+def _device(tmp_path: Path, access: HomeAccess, ip: str = "192.168.1.50") -> TestClient:
     services, _ = _services(tmp_path)
     app = create_app(services, port=8765, access=access)
     return TestClient(app, base_url=PC, client=(ip, 50000), follow_redirects=False)
@@ -45,11 +45,11 @@ def _sign_in(client: TestClient, passcode: str = SECRET, origin: str = PC):  # t
 
 
 def test_addresses_and_names() -> None:
-    assert is_home_network("192.168.0.50") and is_home_network("10.1.2.3")
+    assert is_home_network("192.168.1.50") and is_home_network("10.1.2.3")
     assert is_home_network("172.20.0.9") and is_home_network("fe80::1")
     assert not is_home_network("8.8.8.8") and not is_home_network("127.0.0.1")
     assert not is_home_network("not-an-ip")
-    assert home_host("192.168.0.110:8765") and home_host("nobara-pc.local:8765")
+    assert home_host("192.168.1.20:8765") and home_host("nobara-pc.local:8765")
     assert not home_host("evil.example:8765") and not home_host("8.8.8.8:8765")
 
 
@@ -78,7 +78,7 @@ def test_the_right_passcode_lets_the_device_in(tmp_path: Path) -> None:
         assert "httponly" in cookie and "samesite=strict" in cookie
         assert phone.get("/api/conversations").status_code == 200
         cookie = f"{COOKIE}={phone.cookies[COOKIE]}"  # ws: the test client sends neither
-        live = {"origin": PC, "cookie": cookie, "host": "192.168.0.110:8765"}
+        live = {"origin": PC, "cookie": cookie, "host": "192.168.1.20:8765"}
         with phone.websocket_connect("/ws", headers=live) as ws:
             assert ws.receive_json()["type"] == "status"
         phone.post("/logout", headers={"origin": PC})
@@ -93,7 +93,7 @@ def test_this_computer_needs_no_passcode(tmp_path: Path) -> None:
 
 def test_the_internet_is_refused_even_with_a_stolen_cookie(tmp_path: Path) -> None:
     access = _access(tmp_path)
-    token = access.sign_in("192.168.0.50", SECRET)
+    token = access.sign_in("192.168.1.50", SECRET)
     with _device(tmp_path, access, ip="8.8.8.8") as outsider:
         outsider.cookies.set(COOKIE, token or "")
         assert outsider.get("/api/conversations").status_code == 403
@@ -114,7 +114,7 @@ def test_other_websites_cannot_use_a_signed_in_browser(tmp_path: Path) -> None:
             == 403
         )
         cookie = f"{COOKIE}={phone.cookies[COOKIE]}"
-        evil_live = {**evil, "cookie": cookie, "host": "192.168.0.110:8765"}
+        evil_live = {**evil, "cookie": cookie, "host": "192.168.1.20:8765"}
         with (
             pytest.raises(WebSocketDisconnect),
             phone.websocket_connect("/ws", headers=evil_live) as ws,
@@ -137,7 +137,7 @@ def test_guessing_is_stopped(tmp_path: Path) -> None:
 
 def test_a_new_passcode_signs_every_device_out(tmp_path: Path) -> None:
     access = _access(tmp_path)
-    token = access.sign_in("192.168.0.50", SECRET)
+    token = access.sign_in("192.168.1.50", SECRET)
     assert access.signed_in(token)
     access.set_passcode("a brand new passcode")
     assert not access.signed_in(token)
@@ -145,7 +145,7 @@ def test_a_new_passcode_signs_every_device_out(tmp_path: Path) -> None:
 
 def test_the_passcode_is_never_stored(tmp_path: Path) -> None:
     access = _access(tmp_path)
-    token = access.sign_in("192.168.0.50", SECRET) or ""
+    token = access.sign_in("192.168.1.50", SECRET) or ""
     for f in (access.passcode_file, access.sessions_file):
         text = f.read_text()
         assert SECRET not in text and token not in text

@@ -225,9 +225,9 @@ def test_too_many_words_for_the_length_of_the_sound_is_noise() -> None:
 
 async def test_whisper_adapter_passes_vocabulary_as_prompt_and_warms_up() -> None:
     stub = _StubWhisper()
-    stt = FasterWhisperSTT(model=stub, vocabulary=("Friday", "Karthik"))
+    stt = FasterWhisperSTT(model=stub, vocabulary=("Friday", "Alex"))
     await stt.warm_up()
-    assert stub.kwargs["initial_prompt"] == "Friday, Karthik."
+    assert stub.kwargs["initial_prompt"] == "Friday, Alex."
     assert stub.audio is not None and len(stub.audio) == 8000
     plain = _StubWhisper()
     await FasterWhisperSTT(model=plain).transcribe(tone(100), 16_000)

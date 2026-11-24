@@ -607,7 +607,7 @@ to 12 are the core. Stage 13 is optional downloads. Stage 14 collects files.
 
 ## Stage 9: the models drive
 
-The models live on the NTFS hard drive ("Karthik's HDD"), which should mount at
+The models live on the NTFS hard drive (the data drive), which should mount at
 `/mnt/ai-hdd` every time the PC starts.
 
 ```bash

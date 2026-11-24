@@ -3,13 +3,13 @@
 The local talking model reads the chat and writes:
 
 * a summary of one or two sentences, which FRIDAY's timeline shows from then
-  on ("About: changing a Tamil song into a flute version");
+  on ("About: changing a folk song into a flute version");
 * at most three facts the owner said about themselves. These are only
   *suggested*: they wait in the app until the owner keeps or drops each one,
   and only a kept one goes into the memory file.
 
 A fact must be built from the owner's own words, so the model can't slip in
-something nobody said ("Karthik is a perfectionist").
+something nobody said ("Alex is a perfectionist").
 """
 
 from __future__ import annotations
@@ -43,14 +43,14 @@ dislikes. Write each one short, in {user}'s own words, starting with "{user}".
 Only what {user} clearly said, never a guess about their personality, never
 something FRIDAY said, never a one-off request, and never anything about
 FRIDAY herself. Most chats have none: then [].
-Good facts: "{user} works as a GRC analyst", "{user} has a sister called
-Priya", "{user} likes flute music", "{user} needs to give his car for service".
+Good facts: "{user} works as a nurse", "{user} has a sister called
+Anna", "{user} likes flute music", "{user} needs to give his car for service".
 Not facts, never write these: "{user} asked for a picture of Kratos", "{user}
 wants bass added to the song", "{user} asked what 2 plus 2 is".
 """
 
 # What the model still writes now and then that is a request, not a fact about
-# the owner: "Karthik asked ...", "... the song", "... FRIDAY ...".
+# the owner: "Alex asked ...", "... the song", "... FRIDAY ...".
 _NOT_A_FACT = re.compile(
     r"^\S+\s+(?:asked|requested|questioned|tested|described|told|said|wanted\s+the|"
     r"is\s+asking|was\s+asking|can|could|was\s+just|is\s+just|"

@@ -305,7 +305,7 @@ class VocalSettings(_Strict):
 
 
 class FridayConfig(_Strict):
-    user_name: str = "Karthik"
+    user_name: str = "Alex"
     default_mode: Mode = Mode.COMPANION
     offline: bool = False
     log_level: str = "INFO"

@@ -51,8 +51,8 @@ and she never answers. Session A ended this way (22:22:21–22:22:35):
 "How do you find out how to do this?" → "That's fine, don't find the back door
 nice, go ahead." → "Now, you know, I wish." → "Okay." — four merges, no reply,
 owner quit. Session B 22:33:07–22:33:45 is similar ("You know those girls are
-coming.", "And who's the peer agent?", "Good morning, Karthik. Good morning.
-I'm Karthik." are clearly someone else in the room / TV). Suggestions: don't let
+coming.", "And who's the peer agent?", "Good morning, [name]. Good morning.
+I'm [name]." are clearly someone else in the room / TV). Suggestions: don't let
 backchannel/filler-only fragments ("Okay.", "Well.") restart a pending turn;
 cap merges (e.g. reply after 2 merges or N seconds); consider a minimum
 loudness/energy relative to the speech that started the turn so distant voices
@@ -77,13 +77,13 @@ owner. Trade-off to offer: `small.en` is more accurate but ~3x slower STT
 
 **R2-e (P2). Model makes things up (persona/prompt, 3B model).**
 - New session, "What were we talking?": invented "We were discussing the
-  brightness setting on Karthik's laptop … I forgot to adjust it earlier",
+  brightness setting on the owner's laptop … I forgot to adjust it earlier",
   then claimed "I can adjust the display settings for this laptop".
 - "Do you have internet access?" → "Yeah, I do." (false).
 - Stock market: claimed it's "been pretty steady lately", "recovering from the
   pandemic", Tesla/Amazon "holding up" — current-events claims it has no data
   for. (It did correctly refuse a live stock price.)
-- Still says "Karthik's laptop" in the third person to Karthik.
+- Still says "the owner's laptop" in the third person to the owner.
 - "I'm glad I could pass the test" — misread the user.
 The system prompt should state plainly what FRIDAY can and cannot do (no
 internet, no device control, no memory of past sessions) and forbid inventing

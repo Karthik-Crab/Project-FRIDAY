@@ -197,7 +197,7 @@ def calendar(today: date | None = None) -> str:
 
 @dataclass(frozen=True, slots=True)
 class Persona:
-    user_name: str = "Karthik"
+    user_name: str = "Alex"
     # Sounds the current voice can make, e.g. ("laugh", "sigh"). Empty for a
     # voice that only reads words.
     expression_tags: tuple[str, ...] = ()

@@ -25,9 +25,9 @@ from friday.llm.router import ProviderRouter
 from friday.persona.persona import Channel
 
 CHAT = [
-    ("user", "Hey Friday, I work as a GRC analyst and I love flute music."),
+    ("user", "Hey Friday, I work as a nurse and I love flute music."),
     ("assistant", "Nice! Flute music is lovely."),
-    ("user", "Make a flute version of this song for my sister Priya."),
+    ("user", "Make a flute version of this song for my sister Anna."),
     ("assistant", "Done, the flute version is ready."),
 ]
 
@@ -48,10 +48,10 @@ def _asker(reply: dict[str, Any] | str) -> Any:
 
 def test_a_fact_nobody_said_is_left_out() -> None:
     said = "\n".join(t for r, t in CHAT if r == "user")
-    assert grounded("Karthik loves flute music", said, "Karthik")
-    assert grounded("Karthik works as a GRC analyst", said, "Karthik")
-    assert not grounded("Karthik is a perfectionist", said, "Karthik")
-    assert not grounded("Karthik", said, "Karthik")
+    assert grounded("Alex loves flute music", said, "Alex")
+    assert grounded("Alex works as a nurse", said, "Alex")
+    assert not grounded("Alex is a perfectionist", said, "Alex")
+    assert not grounded("Alex", said, "Alex")
 
 
 async def test_summary_and_suggested_facts_from_a_chat() -> None:
@@ -59,20 +59,20 @@ async def test_summary_and_suggested_facts_from_a_chat() -> None:
         "<think>hmm</think>"
         + json.dumps(
             {
-                "summary": "Karthik asked for a flute version of a song for his sister.",
+                "summary": "Alex asked for a flute version of a song for his sister.",
                 "facts": [
-                    "Karthik works as a GRC analyst",
-                    "Karthik loves flute music",
-                    "Karthik is a perfectionist",  # never said
-                    "Karthik has a sister called Priya",
+                    "Alex works as a nurse",
+                    "Alex loves flute music",
+                    "Alex is a perfectionist",  # never said
+                    "Alex has a sister called Anna",
                 ],
             }
         )
     )
-    kept = await keep(CHAT, ask, "Karthik", known=["[2026-11-20] Karthik loves flute music"])
-    assert kept.summary.startswith("Karthik asked for a flute version")
+    kept = await keep(CHAT, ask, "Alex", known=["[2026-11-20] Alex loves flute music"])
+    assert kept.summary.startswith("Alex asked for a flute version")
     # the made-up trait is dropped, and so is what the notes already say
-    assert kept.facts == ("Karthik works as a GRC analyst", "Karthik has a sister called Priya")
+    assert kept.facts == ("Alex works as a nurse", "Alex has a sister called Anna")
     request = ask.asked[0]
     assert request.think is False and "FRIDAY: Done" in request.messages[0].content
 
@@ -83,19 +83,19 @@ async def test_requests_are_not_kept_as_facts() -> None:
         {
             "summary": "Car service and a picture.",
             "facts": [
-                "Karthik asked for a warrior with a white beard",
-                "Karthik wants a warrior with a white beard",
-                "Karthik needs to give his car for service",
+                "Alex asked for a warrior with a white beard",
+                "Alex wants a warrior with a white beard",
+                "Alex needs to give his car for service",
             ],
         }
     )
-    kept = await keep(chat, ask, "Karthik")
-    assert kept.facts == ("Karthik needs to give his car for service",)
+    kept = await keep(chat, ask, "Alex")
+    assert kept.facts == ("Alex needs to give his car for service",)
 
 
 async def test_a_reply_without_json_is_an_error() -> None:
     with pytest.raises(ValueError):
-        await keep(CHAT, _asker("Sure! Here's a summary."), "Karthik")
+        await keep(CHAT, _asker("Sure! Here's a summary."), "Alex")
 
 
 # Which chats get summarised
@@ -145,20 +145,20 @@ async def test_a_quiet_chat_gets_a_summary_and_suggestions_wait_for_the_owner(
 ) -> None:
     services, notes = _app(
         tmp_path,
-        {"summary": "A flute song for Priya.", "facts": ["Karthik loves flute music"]},
+        {"summary": "A flute song for Anna.", "facts": ["Alex loves flute music"]},
     )
     events: list[dict[str, Any]] = []
     services.emit = events.append  # type: ignore[method-assign]
     cid = _saved_chat(services)
     assert await services.keep_one(idle_s=-1) == cid
     assert await services.keep_one(idle_s=-1) is None  # done until it changes
-    assert services.store.summary(cid)[0] == "A flute song for Priya."
+    assert services.store.summary(cid)[0] == "A flute song for Anna."
     [item] = services.suggestions()
-    assert item["fact"] == "Karthik loves flute music" and notes.facts() == []  # not yet
+    assert item["fact"] == "Alex loves flute music" and notes.facts() == []  # not yet
     assert events[-1]["type"] == "suggestions"
     # The timeline shows the summary from now on.
     other = services.store.create()
-    assert "About: A flute song for Priya." in str(services.engine(other.id).timeline())
+    assert "About: A flute song for Anna." in str(services.engine(other.id).timeline())
 
     with TestClient(create_app(services, port=8765), base_url="http://127.0.0.1:8765") as client:
         assert client.get("/api/suggestions").json()["items"][0]["id"] == item["id"]
@@ -167,7 +167,7 @@ async def test_a_quiet_chat_gets_a_summary_and_suggestions_wait_for_the_owner(
         assert client.post(url, json={"keep": True}, headers=ORIGIN).status_code == 200
         assert client.post(url, json={"keep": True}, headers=ORIGIN).status_code == 409
         assert services.suggestions() == []
-    assert [f.split("] ", 1)[1] for f in notes.facts()] == ["Karthik loves flute music"]
+    assert [f.split("] ", 1)[1] for f in notes.facts()] == ["Alex loves flute music"]
 
 
 async def test_nothing_is_summarised_while_friday_is_busy_or_after_a_failure(
@@ -223,15 +223,15 @@ def test_questions_about_the_past_are_recognised() -> None:
 
 
 def test_matching_lines_come_back_with_their_dates() -> None:
-    found = search("Do you remember the flute song?", LINES, "Karthik", NOW)
-    assert 'Saturday 21 November 2026 at 19:00, Karthik said: "make a flute' in found
+    found = search("Do you remember the flute song?", LINES, "Alex", NOW)
+    assert 'Saturday 21 November 2026 at 19:00, Alex said: "make a flute' in found
     assert "you (FRIDAY) said" in found and "family movie" not in found
 
 
 def test_a_named_day_limits_the_search() -> None:
-    found = search("What did we talk about yesterday?", LINES, "Karthik", NOW)
+    found = search("What did we talk about yesterday?", LINES, "Alex", NOW)
     assert "family movie" in found and "flute" not in found
-    nothing = search("Did we talk about cricket?", LINES, "Karthik", NOW)
+    nothing = search("Did we talk about cricket?", LINES, "Alex", NOW)
     assert "found no lines matching" in nothing and "never guess" in nothing
 
 
@@ -278,7 +278,7 @@ class FakeMeanings:
 
 def test_meaning_counts_as_a_match_without_shared_words() -> None:
     found = search(
-        "Do you remember my vehicle maintenance?", LINES, "Karthik", NOW, [0.2, 0.1, 0.9, 0.3], 0.5
+        "Do you remember my vehicle maintenance?", LINES, "Alex", NOW, [0.2, 0.1, 0.9, 0.3], 0.5
     )
     assert "what is 2 plus 2" in found and "flute" not in found
 
@@ -300,7 +300,7 @@ async def test_saved_lines_get_a_meaning_while_idle_and_are_found_by_it(tmp_path
     await services.mean_some()
 
     now = services.store.create()
-    found = await services._recall("Do you remember my automobile upkeep?", now.id, "Karthik")
+    found = await services._recall("Do you remember my automobile upkeep?", now.id, "Alex")
     assert "give my vehicle for service" in found and "flute" not in found
     services.store.delete(chat.id)
     assert services.store.meanings("fake-embed") == {}
@@ -314,4 +314,4 @@ async def test_without_the_meaning_model_the_search_uses_words(tmp_path: Path) -
     _saved_chat(services)
     assert await services.mean_some() == 0 and services.meanings is None
     now = services.store.create()
-    assert "flute version" in await services._recall("remember the flute?", now.id, "Karthik")
+    assert "flute version" in await services._recall("remember the flute?", now.id, "Alex")

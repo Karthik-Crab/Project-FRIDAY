@@ -21,8 +21,8 @@ def _ts(day: int, hour: int) -> float:
 
 
 def test_the_first_chat_is_called_the_first() -> None:
-    text = timeline([ChatSummary("a", _ts(24, 12), _ts(24, 12), 2, ("Hi",))], "a", "Karthik", NOW)
-    assert "This is the first conversation you have had with Karthik." in text
+    text = timeline([ChatSummary("a", _ts(24, 12), _ts(24, 12), 2, ("Hi",))], "a", "Alex", NOW)
+    assert "This is the first conversation you have had with Alex." in text
     assert "This conversation started today at 12:00." in text
 
 
@@ -33,7 +33,7 @@ def test_dates_counts_and_openings_come_from_the_saved_chats() -> None:
         ChatSummary("mid", _ts(23, 18), _ts(23, 19), 6, ("what is 2 plus 2?",)),
         ChatSummary("now", _ts(24, 12), _ts(24, 12), 4, ("Do you remember me?",)),
     ]
-    text = timeline(chats, "now", "Karthik", NOW)
+    text = timeline(chats, "now", "Alex", NOW)
     assert "You first talked Saturday 21 November 2026 at 15:00 (3 days ago)." in text
     assert "3 saved chats so far, on 3 different days." in text
     assert "The last chat before this one: yesterday at 19:00." in text
@@ -45,7 +45,7 @@ def test_a_long_history_keeps_the_first_chat_and_the_latest_ones() -> None:
     chats = [
         ChatSummary(str(i), _ts(1, 0) + i * 3600, _ts(1, 0), 2, (f"chat {i}",)) for i in range(20)
     ]
-    text = timeline(chats, None, "Karthik", NOW)
+    text = timeline(chats, None, "Alex", NOW)
     assert '"chat 0"' in text and '"chat 19"' in text and '"chat 5"' not in text
     assert "(11 more chats in between are not listed.)" in text
 
@@ -73,7 +73,7 @@ def test_the_app_tells_friday_her_history_on_every_reply(tmp_path: Path) -> None
     services = AppServices(store, lambda _: ConversationEngine(router, channel=Channel.TEXT))
     current = store.create()
     system = services.engine(current.id).build_request().system
-    assert "Your real history with Karthik" in system
+    assert "Your real history with Alex" in system
     assert '"make a flute song"' in system
 
 
